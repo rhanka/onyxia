@@ -171,6 +171,19 @@ resource "kubernetes_manifest" "managed_certificate" {
   }
 }
 
+resource "google_compute_address" "services_ingress_nginx" {
+  count = var.enable_services_ingress_nginx ? 1 : 0
+
+  name         = "${var.release_name}-ingress-nginx-ip"
+  region       = var.region
+  address_type = "EXTERNAL"
+
+  lifecycle {
+    # Keep the IP across app destroys so we don't have to update DNS each time.
+    prevent_destroy = false
+  }
+}
+
 resource "kubernetes_namespace" "services_ingress_nginx" {
   count = var.enable_services_ingress_nginx ? 1 : 0
 
@@ -211,8 +224,9 @@ resource "helm_release" "services_ingress_nginx" {
         # flow (Keycloak → Google).
         allowSnippetAnnotations = true
         service = {
-          type        = "LoadBalancer"
-          annotations = var.services_ingress_nginx_controller_service_annotations
+          type           = "LoadBalancer"
+          loadBalancerIP = google_compute_address.services_ingress_nginx[0].address
+          annotations    = var.services_ingress_nginx_controller_service_annotations
         }
         resources = {
           requests = {
