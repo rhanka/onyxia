@@ -31,8 +31,10 @@ err() { echo "ERROR: $*" >&2; exit 2; }
 [ -n "${KEYCLOAK_HOSTNAME:-}" ] || err "set KEYCLOAK_HOSTNAME (e.g. auth.onyxia.example.com)"
 
 if [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
-  GOOGLE_CLIENT_SECRET="$(kubectl -n onyxia get secret "${ONYXIA_OAUTH2_SECRET_NAME}" -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d)" \
-    || err "set GOOGLE_CLIENT_SECRET or create Secret '${ONYXIA_OAUTH2_SECRET_NAME}' in ns 'onyxia' with key client-secret"
+  if ! GOOGLE_CLIENT_SECRET="$(kubectl -n onyxia get secret "${ONYXIA_OAUTH2_SECRET_NAME}" -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d)"; then
+    err "set GOOGLE_CLIENT_SECRET or create Secret '${ONYXIA_OAUTH2_SECRET_NAME}' in ns 'onyxia' with key client-secret"
+  fi
+  [ -n "${GOOGLE_CLIENT_SECRET}" ] || err "set GOOGLE_CLIENT_SECRET (Secret '${ONYXIA_OAUTH2_SECRET_NAME}' exists but key 'client-secret' is empty)"
 fi
 
 KCADM=(kubectl -n "$KEYCLOAK_NAMESPACE" exec "$KEYCLOAK_POD" -- /opt/keycloak/bin/kcadm.sh)

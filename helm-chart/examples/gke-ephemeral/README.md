@@ -91,6 +91,54 @@ Day-to-day:
 The sections below explain each layer if you want to drive `tofu` directly
 (`source scripts/_load_env.sh` first to get the `TF_VAR_*` exported).
 
+## CI on GitHub Actions
+
+A workflow at `.github/workflows/onyxia-gke-ephemeral.yml` drives the example
+end-to-end from your fork without ever exposing personal values in the repo.
+Everything personal lives in GitHub repo **variables** (non-secret) and
+**secrets** (sensitive); the workflow file references them by name only.
+
+### One-time setup
+
+```bash
+# .env.local already populated with the non-secret values
+./scripts/gh-setup.sh
+```
+
+`gh-setup.sh` pushes the following to your fork:
+
+| Kind   | Name                          | Source                  |
+|--------|-------------------------------|-------------------------|
+| var    | GCP_PROJECT_ID                | `.env.local`            |
+| var    | GCP_REGION                    | `.env.local`            |
+| var    | GCP_CLUSTER_NAME              | `.env.local`            |
+| var    | PUBLIC_HOSTNAME               | `.env.local`            |
+| var    | KEYCLOAK_HOSTNAME             | `.env.local`            |
+| var    | LETSENCRYPT_EMAIL             | `.env.local`            |
+| var    | GOOGLE_OAUTH_CLIENT_ID        | `.env.local`            |
+| var    | GOOGLE_OAUTH_ALLOWED_EMAILS   | `.env.local`            |
+| secret | GOOGLE_OAUTH_CLIENT_SECRET    | prompt (or env)         |
+| secret | GOOGLE_OAUTH_COOKIE_SECRET    | prompt (or env)         |
+| secret | KEYCLOAK_ADMIN_PASSWORD       | prompt (or env)         |
+| secret | GCP_SA_KEY                    | path or paste (JSON)    |
+
+The deployer service account needs at least `roles/container.admin`,
+`roles/compute.networkAdmin`, `roles/iam.serviceAccountUser` on the project.
+
+### Run
+
+```bash
+gh workflow run onyxia-gke-ephemeral.yml -f mode=init       # full cold start
+gh workflow run onyxia-gke-ephemeral.yml -f mode=resume     # apply app + reconfigure Keycloak realm
+gh workflow run onyxia-gke-ephemeral.yml -f mode=down       # destroy app layer (keeps the cluster)
+gh workflow run onyxia-gke-ephemeral.yml -f mode=down_full  # destroy everything down to the VPC
+```
+
+`init` runs the three Terraform layers in order and bootstraps the Kubernetes
+Secrets (`onyxia-oauth2-proxy`, `keycloak-bootstrap-admin`). `resume` is the
+fast path after a hibernation: it only touches the `app` layer and re-applies
+the Keycloak realm (the H2 in-memory store loses its state every restart).
+
 ## Manual `tofu` workflow (advanced)
 
 If you'd rather drive `tofu` directly (without the helper scripts), source the
