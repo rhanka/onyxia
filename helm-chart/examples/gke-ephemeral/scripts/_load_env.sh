@@ -32,6 +32,9 @@ for var in PROJECT_ID REGION CLUSTER_NAME PUBLIC_HOSTNAME LETSENCRYPT_EMAIL GOOG
   fi
 done
 
+# Convention: remote state lives in a GCS bucket per project.
+export ONYXIA_TFSTATE_BUCKET="${ONYXIA_TFSTATE_BUCKET:-${PROJECT_ID}-onyxia-tfstate}"
+
 # Map env vars to Terraform var inputs (TF_VAR_ prefix is auto-picked).
 export TF_VAR_project_id="${PROJECT_ID}"
 export TF_VAR_region="${REGION}"

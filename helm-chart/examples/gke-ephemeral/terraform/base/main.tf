@@ -1,6 +1,9 @@
 terraform {
   required_version = ">= 1.5"
 
+  # Remote state in GCS. Pass `-backend-config=…` via scripts/_tofu.sh.
+  backend "gcs" {}
+
   required_providers {
     google = {
       source  = "hashicorp/google"

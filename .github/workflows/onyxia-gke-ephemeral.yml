@@ -80,9 +80,8 @@ jobs:
       - name: (init) Apply base + cluster
         if: inputs.mode == 'init'
         run: |
-          source scripts/_load_env.sh
           for layer in base cluster; do
-            ( cd terraform/${layer} && tofu init -input=false && tofu apply -input=false -auto-approve )
+            ./scripts/_tofu.sh "${layer}" apply -input=false -auto-approve
           done
 
       - name: (init) Connect kubectl to cluster
@@ -114,9 +113,7 @@ jobs:
       # ---------------- resume + init: apply app + post-config ----------------
       - name: Apply app layer
         if: inputs.mode == 'init' || inputs.mode == 'resume'
-        run: |
-          source scripts/_load_env.sh
-          ( cd terraform/app && tofu init -input=false && tofu apply -input=false -auto-approve )
+        run: ./scripts/_tofu.sh app apply -input=false -auto-approve
 
       - name: Reconnect kubectl (token may have rotated)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
@@ -145,14 +142,11 @@ jobs:
       # ---------------- down modes ----------------
       - name: (down) Destroy app layer
         if: inputs.mode == 'down' || inputs.mode == 'down_full'
-        run: |
-          source scripts/_load_env.sh
-          ( cd terraform/app && tofu init -input=false && tofu destroy -input=false -auto-approve )
+        run: ./scripts/_tofu.sh app destroy -input=false -auto-approve
 
       - name: (down_full) Destroy cluster + base
         if: inputs.mode == 'down_full'
         run: |
-          source scripts/_load_env.sh
           for layer in cluster base; do
-            ( cd terraform/${layer} && tofu init -input=false && tofu destroy -input=false -auto-approve )
+            ./scripts/_tofu.sh "${layer}" destroy -input=false -auto-approve
           done
