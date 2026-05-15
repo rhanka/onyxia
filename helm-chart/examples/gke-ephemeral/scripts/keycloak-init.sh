@@ -48,25 +48,39 @@ done
 echo "[init-kc] login as admin on master realm..."
 "${KCADM[@]}" config credentials --server "$SERVER" --realm master --user admin --password "$KC_ADMIN_PASSWORD"
 
+# Idempotent helpers: try to create, but swallow "<X> already exists" errors.
+kc_safe_create() {
+  local label="$1"; shift
+  local out rc
+  out=$("${KCADM[@]}" "$@" 2>&1) && rc=0 || rc=$?
+  if [ $rc -eq 0 ]; then
+    echo "${out}"
+    return 0
+  fi
+  if echo "${out}" | grep -qiE "already exists|Conflict detected"; then
+    echo "[init-kc] ${label} already present, skipping"
+    return 0
+  fi
+  echo "${out}" >&2
+  return $rc
+}
+
 echo "[init-kc] create realm onyxia (idempotent)..."
-"${KCADM[@]}" get realms/onyxia >/dev/null 2>&1 \
-  || "${KCADM[@]}" create realms -s realm=onyxia -s enabled=true
+kc_safe_create "realm onyxia" create realms -s realm=onyxia -s enabled=true
 
 echo "[init-kc] create client onyxia (public, PKCE) (idempotent)..."
-"${KCADM[@]}" get clients -r onyxia --query clientId=onyxia 2>/dev/null | grep -q '"clientId" : "onyxia"' \
-  || "${KCADM[@]}" create clients -r onyxia \
-      -s clientId=onyxia -s publicClient=true -s standardFlowEnabled=true -s directAccessGrantsEnabled=false \
-      -s "redirectUris=[\"https://${ONYXIA_HOSTNAME}/*\"]" \
-      -s "webOrigins=[\"https://${ONYXIA_HOSTNAME}\"]" \
-      -s 'attributes."pkce.code.challenge.method"=S256'
+kc_safe_create "client onyxia" create clients -r onyxia \
+  -s clientId=onyxia -s publicClient=true -s standardFlowEnabled=true -s directAccessGrantsEnabled=false \
+  -s "redirectUris=[\"https://${ONYXIA_HOSTNAME}/*\"]" \
+  -s "webOrigins=[\"https://${ONYXIA_HOSTNAME}\"]" \
+  -s 'attributes."pkce.code.challenge.method"=S256'
 
 echo "[init-kc] create Google identity provider (idempotent)..."
-"${KCADM[@]}" get identity-provider/instances/google -r onyxia >/dev/null 2>&1 \
-  || "${KCADM[@]}" create identity-provider/instances -r onyxia \
-      -s alias=google -s providerId=google -s enabled=true -s trustEmail=true \
-      -s "config.clientId=$GOOGLE_CLIENT_ID" \
-      -s "config.clientSecret=$GOOGLE_CLIENT_SECRET" \
-      -s 'config.useJwksUrl=true'
+kc_safe_create "identity-provider google" create identity-provider/instances -r onyxia \
+  -s alias=google -s providerId=google -s enabled=true -s trustEmail=true \
+  -s "config.clientId=$GOOGLE_CLIENT_ID" \
+  -s "config.clientSecret=$GOOGLE_CLIENT_SECRET" \
+  -s 'config.useJwksUrl=true'
 
 echo "[init-kc] done. Discovery doc:"
 curl -s --max-time 10 "https://${KEYCLOAK_HOSTNAME}/realms/onyxia/.well-known/openid-configuration" \
