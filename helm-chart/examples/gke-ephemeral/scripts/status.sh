@@ -6,15 +6,16 @@
 #   PROJECT_ID=my-gcp-project ./scripts/status.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_load_env.sh
+source "${SCRIPT_DIR}/_load_env.sh"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-require_project
 require_tool gcloud
 require_tool kubectl
 require_tool helm
 
-log "gcloud project: ${PROJECT_ID}  location: ${LOCATION}  cluster: ${CLUSTER_NAME}"
+log "gcloud project: ${PROJECT_ID}  region: ${REGION}  cluster: ${CLUSTER_NAME}"
 kube_ctx_for_cluster
 
 log "nodes"

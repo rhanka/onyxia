@@ -68,31 +68,42 @@ what is already on PATH.
 
 ## Quickstart
 
-Bring the example up:
+All personal values (project, hostnames, OAuth client, passwords) live in a
+single gitignored file `.env.local`. Nothing personal lives in any tracked
+file — the helper scripts load `.env.local` and export the right `TF_VAR_*`
++ helm-template substitutions automatically.
 
 ```bash
-PROJECT_ID=my-gcp-project ./scripts/up.sh
+cd helm-chart/examples/gke-ephemeral
+cp .env.local.example .env.local
+$EDITOR .env.local        # fill in PROJECT_ID, hostnames, OAuth, …
+./scripts/up.sh
 ```
 
-Check what is running and the indicative cost:
+Day-to-day:
 
 ```bash
-PROJECT_ID=my-gcp-project ./scripts/status.sh
+./scripts/status.sh         # what's running, indicative cost
+./scripts/down.sh           # destroy app layer only
+./scripts/down.sh --full    # destroy app + cluster + VPC
 ```
 
-Tear the app layer down (keeps the cluster):
+The sections below explain each layer if you want to drive `tofu` directly
+(`source scripts/_load_env.sh` first to get the `TF_VAR_*` exported).
+
+## Manual `tofu` workflow (advanced)
+
+If you'd rather drive `tofu` directly (without the helper scripts), source the
+loader once to export the `TF_VAR_*` variables from `.env.local`:
 
 ```bash
-PROJECT_ID=my-gcp-project ./scripts/down.sh
+source scripts/_load_env.sh
+cd terraform/app && tofu init && tofu apply
 ```
 
-Tear everything down (cluster + VPC):
-
-```bash
-PROJECT_ID=my-gcp-project ./scripts/down.sh --full
-```
-
-The sections below explain each layer if you want to drive `tofu` directly.
+The legacy per-layer `terraform.tfvars` workflow (one `tfvars` file per root)
+is still supported as an alternative — see the `*.tfvars.example` files. Pick
+one approach; do not mix.
 
 ## Configure Durable Base
 
@@ -337,6 +348,98 @@ kubectl delete namespace cert-smoketest
 ```
 
 On a healthy setup the certificate becomes `Ready=True` in 10–30 seconds.
+
+## Real Google Identity — Keycloak IdP (recommended)
+
+The default `oauth2-proxy` gateway above only **gates** access to Onyxia; the
+platform itself runs in `authentication.mode: none` and sees every user as the
+mock account `default` / `John`. For multi-user usage with real Gmail identities
+propagated inside Onyxia (per-user projects, vault dirs, namespaces), enable
+the optional in-cluster Keycloak with a Google identity provider.
+
+This mirrors the SSP Cloud / INSEE production pattern (Onyxia → Keycloak →
+Google) and works out of the box.
+
+### Enable via `.env.local`
+
+Set in `.env.local`:
+
+```bash
+KEYCLOAK_HOSTNAME=auth.onyxia.example.com   # must resolve to the same LB
+ENABLE_KEYCLOAK=true                        # default is already true when using ./scripts/up.sh
+```
+
+### Create the Keycloak admin password as a Kubernetes Secret (out of band)
+
+The admin password is never stored in any file in this repo (not even
+gitignored ones) or in Terraform state. Create it directly in the cluster:
+
+```bash
+kubectl create namespace keycloak --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n keycloak create secret generic keycloak-bootstrap-admin \
+  --from-literal=password='<your strong password>'
+```
+
+DNS: add an `A` record `auth.onyxia.example.com → <services_ingress_nginx_ip>`.
+
+### Add the Keycloak callback to Google OAuth
+
+In Google Cloud Console → APIs & Services → Credentials → your OAuth 2.0 Web
+client, add the redirect URI:
+
+```
+https://auth.onyxia.example.com/realms/onyxia/broker/google/endpoint
+```
+
+### Apply + configure the realm
+
+```bash
+./scripts/up.sh
+
+# Configure the realm (idempotent, also re-run after each Keycloak restart
+# since the chart ships H2 in-memory by default). The admin password is read
+# back from the Kubernetes Secret you created above.
+source ./scripts/_load_env.sh
+KC_ADMIN_PASSWORD="$(kubectl -n keycloak get secret keycloak-bootstrap-admin -o jsonpath='{.data.password}' | base64 -d)" \
+GOOGLE_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID}" \
+ONYXIA_HOSTNAME="${PUBLIC_HOSTNAME}" \
+KEYCLOAK_HOSTNAME="${KEYCLOAK_HOSTNAME}" \
+  ./scripts/keycloak-init.sh
+```
+
+`keycloak-init.sh` is idempotent. It creates the `onyxia` realm, a public PKCE
+client called `onyxia`, and a Google identity provider — exactly what Onyxia
+expects. Re-run after every Keycloak restart (the chart ships an H2 in-memory
+database by default; for persistence wire an external Postgres via
+`database.*` in the Helm release).
+
+### Switch Onyxia to OIDC against Keycloak
+
+In `onyxia-gke-public-values.yaml` (already wired when `enable_keycloak=true`):
+
+- `ingress.enabled: true` with `class: nginx` + `cert-manager` annotation.
+- `nginx.ingress.kubernetes.io/configuration-snippet` overrides the strict
+  default `frame-src` CSP so oidc-spa can iframe Keycloak's login.
+- `api.env.authentication.mode: openidconnect`
+- `api.env.oidc.issuer-uri: "https://auth.<your hostname>/realms/onyxia"`
+- `api.env.oidc.clientID: "onyxia"`
+- **`api.env.oidc.username-claim: sub`** — must produce an RFC1123-compliant
+  token (no dots/@). The Keycloak `sub` UUID is always safe. Using `email`
+  breaks because Onyxia API filters non-RFC1123 namespaces and the user-project
+  is dropped.
+- `web.env.OIDC_DISABLE_DPOP: "true"` — Keycloak doesn't accept the `DPoP`
+  header on the token endpoint by default.
+
+`./scripts/up.sh` already sets `enable_oauth2_proxy_gateway=false` and
+`services_ingress_nginx_oauth2_auth=false` when `ENABLE_KEYCLOAK=true`, so the
+oauth2-proxy gateway is not deployed in this mode.
+
+### Result
+
+`https://onyxia.<your hostname>` → "Connexion" → Keycloak login screen → click
+**Google** → Google consent → return to Onyxia logged in as **the real Gmail
+user**. The Account page shows the actual `<your-account>@gmail.com` email and
+a per-user project namespace `user-<keycloak-uuid>`.
 
 ## GKE Autopilot Gotchas
 

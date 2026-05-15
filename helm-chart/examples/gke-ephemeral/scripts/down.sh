@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 # Tear the gke-ephemeral example down.
 #
-# Default scope: the app layer only (Onyxia + ingress-nginx + cert-manager,
-# the two LBs and the Onyxia ingress). The cluster, VPC and bootstrap state
-# stay up. Use --full to also destroy the cluster and VPC.
-#
-# Usage:
-#   PROJECT_ID=my-gcp-project ./scripts/down.sh         # destroy app layer
-#   PROJECT_ID=my-gcp-project ./scripts/down.sh --full  # destroy everything
+# Default scope: the app layer only. Use --full to also destroy cluster + VPC.
+# Reads .env.local for the project identity.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_load_env.sh
+source "${SCRIPT_DIR}/_load_env.sh"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-require_project
 require_tool tofu
 
 FULL=0

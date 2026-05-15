@@ -2,17 +2,15 @@
 # Bring the gke-ephemeral example up.
 # Idempotent: re-running it converges to the declared state.
 #
-# Usage:
-#   PROJECT_ID=my-gcp-project ./scripts/up.sh
-#
-# Optional env: LOCATION (default us-central1), CLUSTER_NAME (default onyxia-test).
-# Reads variables from terraform/app/terraform.tfvars (gitignored).
+# Reads .env.local for everything personal (PROJECT_ID, hostnames, OAuth client,
+# passwords). No personal value lives in any tracked file.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_load_env.sh
+source "${SCRIPT_DIR}/_load_env.sh"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-require_project
 require_tool tofu
 
 log "tofu init"

@@ -1,0 +1,54 @@
+ingress:
+  hosts:
+    - host: ${PUBLIC_HOSTNAME}
+  tls:
+    - hosts:
+        - ${PUBLIC_HOSTNAME}
+      secretName: onyxia-core-tls
+
+web:
+  env:
+    OIDC_DISABLE_DPOP: "true"
+
+api:
+  env:
+    oidc.issuer-uri: "https://${KEYCLOAK_HOSTNAME}/realms/onyxia"
+    oidc.username-claim: sub
+    security.cors.allowed_origins: "https://${PUBLIC_HOSTNAME}"
+  regions:
+    - id: gke
+      name: GKE test
+      description: Short-lived GKE Autopilot test region.
+      onyxiaAPI:
+        baseURL: ""
+      services:
+        type: KUBERNETES
+        expose:
+          domain: services.${PUBLIC_HOSTNAME}
+          ingressClassName: nginx
+          ingress: true
+          route: false
+          certManager:
+            useCertManager: true
+            certManagerClusterIssuer: letsencrypt-prod
+        singleNamespace: false
+        userNamespace: true
+        namespacePrefix: user-
+        usernamePrefix: oidc-
+        groupNamespacePrefix: project-
+        authenticationMode: serviceAccount
+        namespaceAnnotationsDynamic:
+          enabled: false
+        quotas:
+          userEnabled: true
+          user:
+            requests.memory: 4Gi
+            requests.cpu: "2"
+            limits.memory: 8Gi
+            limits.cpu: "4"
+            requests.storage: 20Gi
+            count/pods: "10"
+          groupEnabled: false
+      data: {}
+      auth:
+        type: none
