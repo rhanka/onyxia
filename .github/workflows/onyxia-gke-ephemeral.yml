@@ -41,6 +41,11 @@ jobs:
       LETSENCRYPT_EMAIL:           ${{ vars.LETSENCRYPT_EMAIL }}
       GOOGLE_OAUTH_CLIENT_ID:      ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
       GOOGLE_OAUTH_ALLOWED_EMAILS: ${{ vars.GOOGLE_OAUTH_ALLOWED_EMAILS }}
+      ENABLE_SENTROPIC_THEME:      ${{ vars.ENABLE_SENTROPIC_THEME }}
+      SENTROPIC_HEADER_LOGO_URL:   ${{ vars.SENTROPIC_HEADER_LOGO_URL }}
+      SENTROPIC_HEADER_TEXT_BOLD:  ${{ vars.SENTROPIC_HEADER_TEXT_BOLD }}
+      SENTROPIC_HEADER_TEXT_FOCUS: ${{ vars.SENTROPIC_HEADER_TEXT_FOCUS }}
+      SENTROPIC_THEME_VERSION:     ${{ vars.SENTROPIC_THEME_VERSION }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +79,11 @@ jobs:
           LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
           GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
           GOOGLE_OAUTH_ALLOWED_EMAILS=${GOOGLE_OAUTH_ALLOWED_EMAILS}
+          ENABLE_SENTROPIC_THEME=${ENABLE_SENTROPIC_THEME:-false}
+          SENTROPIC_HEADER_LOGO_URL=${SENTROPIC_HEADER_LOGO_URL}
+          SENTROPIC_HEADER_TEXT_BOLD=${SENTROPIC_HEADER_TEXT_BOLD}
+          SENTROPIC_HEADER_TEXT_FOCUS=${SENTROPIC_HEADER_TEXT_FOCUS}
+          SENTROPIC_THEME_VERSION=${SENTROPIC_THEME_VERSION}
           EOF
 
       # ---------------- init mode ----------------
@@ -103,6 +113,25 @@ jobs:
       - name: Apply app layer — phase 1 (cert-manager CRDs)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
         run: ./scripts/_tofu.sh app apply -input=false -auto-approve -target=helm_release.cert_manager
+
+      - name: Setup Node (for theme generator)
+        if: (inputs.mode == 'init' || inputs.mode == 'resume') && vars.ENABLE_SENTROPIC_THEME == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: helm-chart/examples/gke-ephemeral/theme/package-lock.json
+
+      - name: Apply app layer — phase 1.2 (theme generation)
+        if: (inputs.mode == 'init' || inputs.mode == 'resume') && vars.ENABLE_SENTROPIC_THEME == 'true'
+        run: |
+          cd theme
+          npm ci --silent
+          cd ..
+          # _load_env.sh splices the BEGIN/END SENTROPIC THEME block into
+          # onyxia-private-values.local.yaml. The subsequent phases reread the
+          # file via TF_VAR_extra_values_files.
+          ./scripts/_load_env.sh
 
       - name: Apply app layer — phase 1.5 (namespaces)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
