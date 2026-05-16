@@ -111,3 +111,36 @@ Expected delta on the example's daily cost: **~$0**.
 ## Next step
 
 Once approved, invoke `superpowers:writing-plans` to break this down into a concrete TF + values + script implementation plan, then execute via `subagent-driven-development`.
+
+---
+
+## Amendments — subagent review (2026-05-16)
+
+Verified against onyxia-api Region.java, GCS quotas docs, AWS SDK v2 issues, SSPCloud live config. Three corrections to the spec above.
+
+**Correction 1 — Onyxia v10 has no per-user STATIC HMAC mode.**
+The original spec implied `credentialsType: STATIC` would let Onyxia API hand a different HMAC pair per user. It does not: `region.data.S3` only defines an optional `sts` block. Without `sts.URL` Onyxia hands NO creds; the user pastes them in the UI. To inject creds automatically we need either (a) a Vault server + STS, or (b) a tiny **GCS STS bridge pod** that the existing `sts.URL` field points at, that mints HMAC pairs scoped to a per-user GCP service account and returns them in AWS STS XML shape.
+
+**Correction 2 — GCS HMAC quotas.** 10 HMAC keys per service account, 100 service accounts per GCP project (raisable). The strict-isolation path (1 SA per user) caps at ~80 users.
+
+**Correction 3 — AWS SDK v2 ≥ 2.30 default integrity checksums break GCS interop.** Every Jupyter / Spark / Trino we ship must export `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED` (or set `request_checksum_calculation=when_required` in `~/.aws/config`). Without it, basic `boto3.put_object` returns `SignatureDoesNotMatch` / `NotImplemented`. This must be in the Onyxia service template env, not the user's notebook.
+
+**Correction 4 — HMAC keys are not in Cloud Audit Logs by default.** Document the gap; v1 is fine for an internal demo, not for prod compliance.
+
+### Updated arbitration
+
+| | Option A — shared SA + IAM Conditions | Option B — GCS STS bridge pod |
+|---|---|---|
+| Pods | 0 | 1 (~30Mi RAM) |
+| $/day | ~$0 | ~$0.05 |
+| Isolation | data-plane only (a user can craft outside-prefix calls until IAM denies) | data-plane + auth-plane (token scoped per user) |
+| Max users | unlimited | ~80 (GCP SA quota) |
+| Audit traceability | weak | full (per-user SA appears in Cloud Audit Logs) |
+| Time to ship | 2 h | 1 day (write the bridge) |
+
+Recommendation: A for v1 (sent-tech demo). B becomes interesting when audit / multi-tenant strictness matter.
+
+### Risks (updated)
+
+- `request_checksum_calculation` is the #1 silent breakage. Add it to the Jupyter / VSCode service-templates as part of v1.
+- The original "Vault" path stays viable but adds a real pod and is overkill at < 5 users.
