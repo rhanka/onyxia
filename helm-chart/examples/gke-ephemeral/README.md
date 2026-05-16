@@ -506,6 +506,50 @@ example's `terraform/app/main.tf` already works around the following:
 - **No write access to the `gce-pd` storage class metadata.** Standard PVCs
   still work; just don't try to mutate the default storage class.
 
+## Brand it (optional)
+
+This example can reskin Onyxia at deploy time using the [`@sentropic/design-system-themes`](https://www.npmjs.com/package/@sentropic/design-system-themes) tokens — colors, fonts, logo, header strings. Zero fork of `onyxia-web`.
+
+### Enable the sentropic theme
+
+In `.env.local`:
+
+```
+ENABLE_SENTROPIC_THEME=true
+SENTROPIC_HEADER_LOGO_URL=https://cdn.sent-tech.ca/onyxia-logo.svg
+SENTROPIC_HEADER_TEXT_BOLD=sent-tech
+SENTROPIC_HEADER_TEXT_FOCUS=Datalab
+```
+
+Run `./scripts/up.sh` (or the GHA workflow with `mode=resume`). The deploy will:
+
+1. `npm ci` inside `theme/` (cached after the first run).
+2. Run `theme/sentropic-to-onyxia.mjs`, which produces a `BEGIN SENTROPIC THEME` block.
+3. Splice the block under `web.env:` in `onyxia-private-values.local.yaml`.
+4. `tofu apply` upgrades the helm release — Onyxia restarts with the new env, which `onyxia-web` consumes at boot.
+
+### Pin a specific sentropic version
+
+Edit `theme/package.json`:
+
+```json
+"dependencies": {
+  "@sentropic/design-system-themes": "0.5.0"
+}
+```
+
+Then `cd theme && npm install --package-lock-only && git commit -am "chore: bump sentropic to <version>"`.
+
+Optionally also set `SENTROPIC_THEME_VERSION=v0.6.0` in `.env.local` so the jsdelivr font URLs match the version you installed.
+
+### Swap to a different design system
+
+The generator is intentionally thin (~80 LOC). Copy `theme/sentropic-to-onyxia.mjs` to e.g. `theme/mydsl-to-onyxia.mjs`, change the `import` and the mapping in `lib/mapping.mjs` to your tokens, and point `_load_env.sh` at the new entry point. The Onyxia palette contract is documented at `onyxia-ui/src/lib/color.urgent.ts` (upstream) and re-stated in `lib/mapping.mjs` comments.
+
+### Scope
+
+V1 ships colors + fonts + logo + header strings. Component **shape** (button radius, drawer geometry) is not covered — that needs a fork of `onyxia-ui` and is deliberately deferred.
+
 ## Pause And Resume
 
 Destroy the disposable layers:

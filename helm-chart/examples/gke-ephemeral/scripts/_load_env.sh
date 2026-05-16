@@ -75,3 +75,35 @@ if [ -f "${TEMPLATE}" ]; then
     envsubst '${PUBLIC_HOSTNAME} ${KEYCLOAK_HOSTNAME}' \
     < "${TEMPLATE}" > "${TARGET}"
 fi
+
+# Sentropic theme (optional). When ENABLE_SENTROPIC_THEME=true, regenerate the
+# palette/font/header env vars and splice them under web.env in the values file.
+# Idempotent: a previous block (delimited by the markers below) is replaced.
+if [ "${ENABLE_SENTROPIC_THEME:-false}" = "true" ]; then
+  : "${SENTROPIC_HEADER_LOGO_URL:?Set SENTROPIC_HEADER_LOGO_URL in .env.local}"
+  : "${SENTROPIC_HEADER_TEXT_BOLD:?Set SENTROPIC_HEADER_TEXT_BOLD in .env.local}"
+  : "${SENTROPIC_HEADER_TEXT_FOCUS:?Set SENTROPIC_HEADER_TEXT_FOCUS in .env.local}"
+
+  THEME_DIR="${EXAMPLE_DIR}/theme"
+  (cd "${THEME_DIR}" && [ -d node_modules ] || npm ci --silent)
+
+  FRAGMENT="$( (cd "${THEME_DIR}" && node sentropic-to-onyxia.mjs) )"
+  # Indent the fragment by 4 spaces so it lands under `  env:`.
+  INDENTED="$(printf '%s\n' "${FRAGMENT}" | sed 's/^/    /')"
+
+  # Replace the existing block, or insert one after the `  env:` line.
+  export TARGET INDENTED
+  python3 - <<'PY'
+import os, re, pathlib
+p = pathlib.Path(os.environ['TARGET'])
+text = p.read_text()
+indented = os.environ['INDENTED']
+block = "    # BEGIN SENTROPIC THEME — generated, do not edit\n" + indented + "\n    # END SENTROPIC THEME\n"
+pattern = re.compile(r"    # BEGIN SENTROPIC THEME[\s\S]*?    # END SENTROPIC THEME\n", re.MULTILINE)
+if pattern.search(text):
+    text = pattern.sub(block, text)
+else:
+    text = re.sub(r"(\nweb:\n  env:\n)", r"\1" + block, text, count=1)
+p.write_text(text)
+PY
+fi
