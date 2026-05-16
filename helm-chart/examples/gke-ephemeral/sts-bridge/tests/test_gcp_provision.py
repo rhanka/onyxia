@@ -36,3 +36,23 @@ def test_provision_creates_when_absent(mint, bind, sa, put, get):
     bind.assert_called_once()
     put.assert_called_once()
     mint.assert_called_once()
+
+
+@patch("app.gcp_provision._k8s_secret_get", return_value=("AKCACHED", "SKCACHED"))
+@patch("app.gcp_provision._gcp_mint_hmac")
+@patch("app.gcp_provision._gcp_get_or_create_sa")
+@patch("app.gcp_provision._gcp_bind_prefix_iam")
+def test_provision_cache_hit(bind, sa, mint, _get):
+    """Cache hit short-circuits BEFORE any GCP I/O."""
+    ak, sk = provision_user_credentials(
+        sub="abc",
+        project="p",
+        bucket="b",
+        namespace="onyxia",
+        k8s=object(),
+        gcp=(object(), object()),
+    )
+    assert (ak, sk) == ("AKCACHED", "SKCACHED")
+    mint.assert_not_called()
+    sa.assert_not_called()
+    bind.assert_not_called()
