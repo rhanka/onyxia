@@ -24,6 +24,8 @@ locals {
     lifecycle = "durable"
   }
 
+  backup_bucket_name = var.backup_bucket_name != "" ? var.backup_bucket_name : "${var.project_id}-onyxia-backup"
+
   bootstrap_services = [
     "cloudresourcemanager.googleapis.com"
   ]
@@ -56,7 +58,7 @@ resource "google_project_service" "required" {
 }
 
 resource "google_storage_bucket" "backup" {
-  name                        = var.backup_bucket_name
+  name                        = local.backup_bucket_name
   project                     = var.project_id
   location                    = var.bucket_location
   storage_class               = "STANDARD"

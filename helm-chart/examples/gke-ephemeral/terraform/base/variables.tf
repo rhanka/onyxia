@@ -17,5 +17,6 @@ variable "bucket_location" {
 
 variable "backup_bucket_name" {
   type        = string
-  description = "Globally unique Cloud Storage bucket name kept while the cluster is deleted."
+  description = "Globally unique Cloud Storage bucket name. Defaults to <project_id>-onyxia-backup if left empty."
+  default     = ""
 }
