@@ -464,7 +464,11 @@ resource "helm_release" "onyxia" {
 
   values = [for values_file in concat([var.values_file], var.extra_values_files) : file(values_file)]
 
-  wait    = true
+  # Onyxia API CrashLoops until the Keycloak realm 'onyxia' exists; that realm
+  # is created by ./scripts/keycloak-init.sh AFTER this apply finishes (in init/
+  # resume modes of the workflow). So we don't wait for readiness here — the
+  # pod self-heals once the realm shows up.
+  wait    = false
   timeout = var.helm_timeout_seconds
   depends_on = [
     google_compute_global_address.ingress,
