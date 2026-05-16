@@ -9,9 +9,15 @@
   },
   "scripts": {
     "generate": "node sentropic-to-onyxia.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "snapshot": "node test/snapshot.mjs"
   },
   "dependencies": {
     "@sentropic/design-system-themes": "0.5.0"
+  },
+  "devDependencies": {
+    "playwright": "1.49.0",
+    "pixelmatch": "6.0.0",
+    "pngjs": "7.0.0"
   }
 }
