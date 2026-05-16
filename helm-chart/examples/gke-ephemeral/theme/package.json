@@ -9,7 +9,7 @@
   },
   "scripts": {
     "generate": "node sentropic-to-onyxia.mjs",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@sentropic/design-system-themes": "0.5.0"
