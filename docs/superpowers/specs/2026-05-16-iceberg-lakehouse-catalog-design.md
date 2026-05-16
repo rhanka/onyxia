@@ -4,6 +4,11 @@
 **Branch:** `brainstorm/iceberg-lakehouse`
 **Related work:** `helm-chart/examples/gke-ephemeral/`, the new `databases` catalog (`trino`, `spark-thrift-server`, `hive-metastore` already shipped by InseeFrLab)
 
+> ⚠️ **Decision reversal (2026-05-16)** — after user arbitration, the implementation **pivoted from Lakekeeper to Apache Polaris** for production-fidelity with SSPCloud (`polaris.lab.sspcloud.fr`). The recommendation in §"Chosen approach" below reflects the original Lakekeeper analysis; the actual plan lives in [`2026-05-16-iceberg-polaris-plan.md`](../plans/2026-05-16-iceberg-polaris-plan.md). Keep this spec for the comparison table and trade-offs, not for the implementation contract.
+
+---
+
+
 ## Context
 
 The user wants Onyxia users to be able to create, evolve, and query **Apache Iceberg** tables from their notebooks — full lakehouse on top of cheap object storage. Iceberg by itself is just a table format spec; on Kubernetes you need three independent layers:
