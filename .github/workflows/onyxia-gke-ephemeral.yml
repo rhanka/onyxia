@@ -1,0 +1,164 @@
+name: onyxia-gke-ephemeral
+
+# Manual-only. Drives the helm-chart/examples/gke-ephemeral example end-to-end
+# from a clean GCP project to a working Onyxia with Keycloak in front of Google.
+# Configure secrets/vars first with `./helm-chart/examples/gke-ephemeral/scripts/gh-setup.sh`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        required: true
+        default: resume
+        options:
+          - init     # full apply (base + cluster + app), bootstrap secrets, install Keycloak realm
+          - resume   # apply app layer only, refresh Keycloak realm if needed
+          - down     # tofu destroy app layer (keeps cluster)
+          - down_full # tofu destroy app + cluster + VPC
+
+concurrency:
+  group: onyxia-gke-ephemeral
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: ${{ inputs.mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: helm-chart/examples/gke-ephemeral
+    env:
+      # All identity comes from GH repo vars/secrets; nothing is hardcoded.
+      PROJECT_ID:                  ${{ vars.GCP_PROJECT_ID }}
+      REGION:                      ${{ vars.GCP_REGION }}
+      CLUSTER_NAME:                ${{ vars.GCP_CLUSTER_NAME }}
+      PUBLIC_HOSTNAME:             ${{ vars.PUBLIC_HOSTNAME }}
+      KEYCLOAK_HOSTNAME:           ${{ vars.KEYCLOAK_HOSTNAME }}
+      LETSENCRYPT_EMAIL:           ${{ vars.LETSENCRYPT_EMAIL }}
+      GOOGLE_OAUTH_CLIENT_ID:      ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+      GOOGLE_OAUTH_ALLOWED_EMAILS: ${{ vars.GOOGLE_OAUTH_ALLOWED_EMAILS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (service account key)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud + gke-gcloud-auth-plugin
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.11.7
+          tofu_wrapper: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Materialize .env.local from GH vars (no personal value lives in the repo)
+        run: |
+          cat > .env.local <<EOF
+          PROJECT_ID=${PROJECT_ID}
+          REGION=${REGION}
+          CLUSTER_NAME=${CLUSTER_NAME}
+          PUBLIC_HOSTNAME=${PUBLIC_HOSTNAME}
+          KEYCLOAK_HOSTNAME=${KEYCLOAK_HOSTNAME}
+          LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+          GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+          GOOGLE_OAUTH_ALLOWED_EMAILS=${GOOGLE_OAUTH_ALLOWED_EMAILS}
+          EOF
+
+      # ---------------- init mode ----------------
+      - name: (init) Apply base + cluster
+        if: inputs.mode == 'init'
+        run: |
+          for layer in base cluster; do
+            ./scripts/_tofu.sh "${layer}" apply -input=false -auto-approve
+          done
+
+      - name: Connect kubectl to cluster
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: |
+          gcloud container clusters get-credentials "${CLUSTER_NAME}" --project "${PROJECT_ID}" --location "${REGION}"
+
+      # ---------------- resume + init: apply app + post-config ----------------
+      # Three-phase apply because two constraints fight each other on cold
+      # clusters:
+      #   1) kubernetes_manifest.cert_manager_cluster_issuer plans against a
+      #      live cluster: the CRD must exist before it can be planned. So
+      #      apply the cert-manager helm release first.
+      #   2) the helm releases for Onyxia & Keycloak expect Kubernetes Secrets
+      #      to exist in the onyxia / keycloak namespaces. We create those
+      #      Secrets out of band (so passwords never enter Terraform state) —
+      #      which means the namespaces must exist BEFORE we create the
+      #      Secrets but AFTER cert-manager. Phase 1.5 takes care of that.
+      - name: Apply app layer — phase 1 (cert-manager CRDs)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: ./scripts/_tofu.sh app apply -input=false -auto-approve -target=helm_release.cert_manager
+
+      - name: Apply app layer — phase 1.5 (namespaces)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: |
+          ./scripts/_tofu.sh app apply -input=false -auto-approve \
+            -target=kubernetes_namespace.onyxia \
+            -target='kubernetes_namespace.keycloak[0]'
+
+      - name: Create out-of-band Kubernetes Secrets (idempotent)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        env:
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_COOKIE_SECRET: ${{ secrets.GOOGLE_OAUTH_COOKIE_SECRET }}
+          KEYCLOAK_ADMIN_PASSWORD:    ${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
+        run: |
+          # oauth2-proxy gateway secret (only consumed if you enable the gateway)
+          kubectl -n onyxia create secret generic onyxia-oauth2-proxy \
+            --from-literal=client-secret="${GOOGLE_OAUTH_CLIENT_SECRET}" \
+            --from-literal=cookie-secret="${GOOGLE_OAUTH_COOKIE_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          # Keycloak bootstrap admin password — value only lives in this Secret.
+          kubectl -n keycloak create secret generic keycloak-bootstrap-admin \
+            --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply app layer — phase 2 (full)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: ./scripts/_tofu.sh app apply -input=false -auto-approve
+
+      - name: Run keycloak-init (idempotent — covers H2 restart)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        env:
+          GOOGLE_CLIENT_SECRET:    ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          KEYCLOAK_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
+        run: |
+          KC_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}" \
+          GOOGLE_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID}" \
+          GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET}" \
+          ONYXIA_HOSTNAME="${PUBLIC_HOSTNAME}" \
+          KEYCLOAK_HOSTNAME="${KEYCLOAK_HOSTNAME}" \
+            ./scripts/keycloak-init.sh
+
+      - name: Smoke test
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: |
+          curl -sIL --max-time 30 --max-redirs 2 "https://${PUBLIC_HOSTNAME}/" | grep -iE "^(HTTP|location)" || true
+          curl -sI --max-time 30 "https://${KEYCLOAK_HOSTNAME}/realms/onyxia/.well-known/openid-configuration" | head -3 || true
+
+      # ---------------- down modes ----------------
+      - name: (down) Destroy app layer
+        if: inputs.mode == 'down' || inputs.mode == 'down_full'
+        run: ./scripts/_tofu.sh app destroy -input=false -auto-approve
+
+      - name: (down_full) Destroy cluster + base
+        if: inputs.mode == 'down_full'
+        run: |
+          for layer in cluster base; do
+            ./scripts/_tofu.sh "${layer}" destroy -input=false -auto-approve
+          done

@@ -1,0 +1,1039 @@
+terraform {
+  required_version = ">= 1.5"
+
+  backend "gcs" {}
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.13"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.30"
+    }
+  }
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+data "google_client_config" "current" {}
+
+data "google_container_cluster" "onyxia" {
+  name     = var.cluster_name
+  project  = var.project_id
+  location = var.region
+}
+
+provider "kubernetes" {
+  host                   = "https://${data.google_container_cluster.onyxia.endpoint}"
+  token                  = data.google_client_config.current.access_token
+  cluster_ca_certificate = base64decode(data.google_container_cluster.onyxia.master_auth[0].cluster_ca_certificate)
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = "https://${data.google_container_cluster.onyxia.endpoint}"
+    token                  = data.google_client_config.current.access_token
+    cluster_ca_certificate = base64decode(data.google_container_cluster.onyxia.master_auth[0].cluster_ca_certificate)
+  }
+}
+
+locals {
+  auth_gateway_name                = "${var.release_name}-auth-gateway"
+  oauth2_proxy_name                = "${var.release_name}-oauth2-proxy"
+  oauth2_proxy_allowed_emails_file = join("\n", concat(var.oauth2_proxy_allowed_emails, [""]))
+  oauth2_proxy_cookie_domain_args  = var.oauth2_proxy_cookie_domain == "" ? [] : ["--cookie-domain=${var.oauth2_proxy_cookie_domain}"]
+  oauth2_proxy_whitelist_domain_args = [
+    for domain in var.oauth2_proxy_whitelist_domains : "--whitelist-domain=${domain}"
+  ]
+  oauth2_proxy_redirect_url = "https://${var.public_hostname}/oauth2/callback"
+  services_ingress_nginx_controller_config = merge(
+    {
+      "force-ssl-redirect"        = "true"
+      "no-tls-redirect-locations" = "/.well-known/acme-challenge"
+      "ssl-redirect"              = "true"
+      "use-forwarded-headers"     = "true"
+      # Allow the Onyxia public Ingress to ship a configuration-snippet that
+      # rewrites CSP (default blocklist forbids `;` which is needed in CSP).
+      "annotation-value-word-blocklist" = ""
+      "annotations-risk-level"          = "Critical"
+    },
+    var.services_ingress_nginx_oauth2_auth ? {
+      "global-auth-response-headers" = "X-Auth-Request-User,X-Auth-Request-Email"
+      "global-auth-signin"           = "https://${var.public_hostname}/oauth2/start?rd=https://$best_http_host$escaped_request_uri"
+      "global-auth-url"              = "http://${local.oauth2_proxy_name}.${var.namespace}.svc.cluster.local/oauth2/auth"
+    } : {}
+  )
+
+  keycloak_extra_env_common = <<-EOT
+    - name: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: admin
+    - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: ${var.keycloak_admin_secret_name}
+          key: password
+    - name: KC_HOSTNAME
+      value: https://${var.keycloak_hostname}
+    - name: KC_HTTP_ENABLED
+      value: "true"
+    - name: KC_PROXY_HEADERS
+      value: xforwarded
+  EOT
+
+  keycloak_extra_env = local.keycloak_extra_env_common
+
+  auth_gateway_nginx_config = <<-EOT
+    server {
+      listen 8080;
+      server_name _;
+      server_tokens off;
+
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-Host $host;
+      proxy_set_header X-Forwarded-Uri $request_uri;
+
+      location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+      }
+
+      location /oauth2/ {
+        proxy_pass http://${local.oauth2_proxy_name}.${var.namespace}.svc.cluster.local:80;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Uri $request_uri;
+      }
+
+      location = /oauth2/auth {
+        internal;
+        proxy_pass http://${local.oauth2_proxy_name}.${var.namespace}.svc.cluster.local:80/oauth2/auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+      }
+
+      location @oauth2_signin {
+        return 302 https://$host/oauth2/start?rd=https://$host$request_uri;
+      }
+
+      location /api {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        auth_request_set $auth_user $upstream_http_x_auth_request_user;
+        auth_request_set $auth_email $upstream_http_x_auth_request_email;
+        proxy_set_header X-Forwarded-User $auth_user;
+        proxy_set_header X-Forwarded-Email $auth_email;
+        proxy_pass http://${var.release_name}-api.${var.namespace}.svc.cluster.local:80;
+      }
+
+      location / {
+        auth_request /oauth2/auth;
+        error_page 401 = @oauth2_signin;
+        auth_request_set $auth_user $upstream_http_x_auth_request_user;
+        auth_request_set $auth_email $upstream_http_x_auth_request_email;
+        proxy_set_header X-Forwarded-User $auth_user;
+        proxy_set_header X-Forwarded-Email $auth_email;
+        proxy_pass http://${var.release_name}-web.${var.namespace}.svc.cluster.local:80;
+      }
+    }
+  EOT
+}
+
+resource "kubernetes_namespace" "onyxia" {
+  metadata {
+    name = var.namespace
+
+    labels = {
+      app     = "onyxia"
+      example = "gke-ephemeral"
+    }
+  }
+}
+
+resource "google_compute_global_address" "ingress" {
+  count = var.create_gke_public_ingress_support ? 1 : 0
+
+  name         = var.ingress_static_ip_name
+  address_type = "EXTERNAL"
+}
+
+resource "kubernetes_manifest" "managed_certificate" {
+  count = var.create_gke_public_ingress_support ? 1 : 0
+
+  manifest = {
+    apiVersion = "networking.gke.io/v1"
+    kind       = "ManagedCertificate"
+    metadata = {
+      name      = var.managed_certificate_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+    }
+    spec = {
+      domains = [var.public_hostname]
+    }
+  }
+}
+
+resource "google_compute_address" "services_ingress_nginx" {
+  count = var.enable_services_ingress_nginx ? 1 : 0
+
+  name         = "${var.release_name}-ingress-nginx-ip"
+  region       = var.region
+  address_type = "EXTERNAL"
+
+  lifecycle {
+    # Keep the IP across app destroys so we don't have to update DNS each time.
+    prevent_destroy = false
+  }
+}
+
+resource "kubernetes_namespace" "services_ingress_nginx" {
+  count = var.enable_services_ingress_nginx ? 1 : 0
+
+  metadata {
+    name = var.services_ingress_nginx_namespace
+
+    labels = {
+      app       = "onyxia"
+      component = "services-ingress-nginx"
+      example   = "gke-ephemeral"
+    }
+  }
+}
+
+resource "helm_release" "services_ingress_nginx" {
+  count = var.enable_services_ingress_nginx ? 1 : 0
+
+  name       = var.services_ingress_nginx_release_name
+  repository = "https://kubernetes.github.io/ingress-nginx"
+  chart      = "ingress-nginx"
+  version    = var.services_ingress_nginx_chart_version
+  namespace  = kubernetes_namespace.services_ingress_nginx[0].metadata[0].name
+
+  values = [
+    yamlencode({
+      controller = {
+        ingressClass = var.services_ingress_class_name
+        ingressClassResource = {
+          controllerValue = "k8s.io/ingress-nginx"
+          default         = false
+          enabled         = true
+          name            = var.services_ingress_class_name
+        }
+        replicaCount = 1
+        config       = local.services_ingress_nginx_controller_config
+        # Required so the Onyxia public Ingress can ship a configuration-snippet
+        # that rewrites the strict CSP frame-src to allow iframing the IdP login
+        # flow (Keycloak → Google).
+        allowSnippetAnnotations = true
+        service = {
+          type           = "LoadBalancer"
+          loadBalancerIP = google_compute_address.services_ingress_nginx[0].address
+          annotations    = var.services_ingress_nginx_controller_service_annotations
+        }
+        resources = {
+          requests = {
+            cpu    = "100m"
+            memory = "128Mi"
+          }
+          limits = {
+            memory = "256Mi"
+          }
+        }
+      }
+    })
+  ]
+
+  wait    = true
+  timeout = var.helm_timeout_seconds
+}
+
+resource "kubernetes_namespace" "cert_manager" {
+  count = var.enable_cert_manager ? 1 : 0
+
+  metadata {
+    name = var.cert_manager_namespace
+
+    labels = {
+      app       = "onyxia"
+      component = "cert-manager"
+      example   = "gke-ephemeral"
+    }
+  }
+}
+
+resource "helm_release" "cert_manager" {
+  count = var.enable_cert_manager ? 1 : 0
+
+  name       = var.cert_manager_release_name
+  repository = "https://charts.jetstack.io"
+  chart      = "cert-manager"
+  version    = var.cert_manager_chart_version
+  namespace  = kubernetes_namespace.cert_manager[0].metadata[0].name
+
+  set {
+    name  = "crds.enabled"
+    value = "true"
+  }
+
+  set {
+    name  = "startupapicheck.enabled"
+    value = "false"
+  }
+
+  # GKE Autopilot blocks writes to the kube-system namespace, including the
+  # default leader-election leases used by cert-manager. Pin leader election
+  # to the cert-manager namespace so cainjector/controller can start.
+  set {
+    name  = "global.leaderElection.namespace"
+    value = var.cert_manager_namespace
+  }
+
+  wait    = true
+  timeout = var.helm_timeout_seconds
+}
+
+resource "kubernetes_manifest" "cert_manager_cluster_issuer" {
+  count = var.enable_cert_manager && var.cert_manager_letsencrypt_email != "" ? 1 : 0
+
+  manifest = {
+    apiVersion = "cert-manager.io/v1"
+    kind       = "ClusterIssuer"
+    metadata = {
+      name = var.cert_manager_cluster_issuer_name
+    }
+    spec = {
+      acme = {
+        email  = var.cert_manager_letsencrypt_email
+        server = var.cert_manager_acme_server
+        privateKeySecretRef = {
+          name = "${var.cert_manager_cluster_issuer_name}-account-key"
+        }
+        solvers = [
+          {
+            http01 = {
+              ingress = {
+                class = var.services_ingress_class_name
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+
+  depends_on = [helm_release.cert_manager, helm_release.services_ingress_nginx]
+}
+
+# ----------------------------------------------------------------------------
+# Optional Keycloak IdP (recommended pattern for Onyxia).
+# A realm + client + Google identity provider are configured separately
+# (admin UI on first run, or a realm import JSON for reproducible deployments).
+# ----------------------------------------------------------------------------
+
+resource "kubernetes_namespace" "keycloak" {
+  count = var.enable_keycloak ? 1 : 0
+
+  metadata {
+    name = var.keycloak_namespace
+
+    labels = {
+      app       = "onyxia"
+      component = "keycloak"
+      example   = "gke-ephemeral"
+    }
+  }
+}
+
+# ------- Optional Postgres backend for Keycloak (realm persistence) ---------
+# When keycloak_persist_realm=true, a tiny single-pod Postgres is deployed in
+# the Keycloak namespace. Cheap (~$0.30/d) and makes the Keycloak realm
+# survive pod restarts. Realms/clients/IdPs configured by keycloak-init.sh
+# stay there across redeploys.
+
+resource "kubernetes_persistent_volume_claim_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+  }
+  spec {
+    access_modes = ["ReadWriteOnce"]
+    resources {
+      requests = { storage = "2Gi" }
+    }
+  }
+  wait_until_bound = false
+}
+
+resource "kubernetes_deployment_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+    labels    = { app = "keycloak-db" }
+  }
+  spec {
+    replicas = 1
+    strategy { type = "Recreate" }
+    selector { match_labels = { app = "keycloak-db" } }
+    template {
+      metadata { labels = { app = "keycloak-db" } }
+      spec {
+        container {
+          name  = "postgres"
+          image = "postgres:16-alpine"
+          env {
+            name  = "POSTGRES_DB"
+            value = "keycloak"
+          }
+          env {
+            name  = "POSTGRES_USER"
+            value = "keycloak"
+          }
+          env {
+            name = "POSTGRES_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = var.keycloak_db_secret_name
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "PGDATA"
+            value = "/var/lib/postgresql/data/pgdata"
+          }
+          port {
+            container_port = 5432
+            name           = "tcp-postgres"
+          }
+          resources {
+            requests = { cpu = "100m", memory = "256Mi" }
+            limits   = { memory = "512Mi" }
+          }
+          volume_mount {
+            name       = "data"
+            mount_path = "/var/lib/postgresql/data"
+          }
+          readiness_probe {
+            exec { command = ["pg_isready", "-U", "keycloak"] }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
+        }
+        volume {
+          name = "data"
+          persistent_volume_claim {
+            claim_name = "keycloak-db"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+  }
+  spec {
+    selector = { app = "keycloak-db" }
+    port {
+      port        = 5432
+      target_port = 5432
+      name        = "tcp-postgres"
+    }
+  }
+}
+
+resource "helm_release" "keycloak" {
+  count = var.enable_keycloak ? 1 : 0
+
+  name       = var.keycloak_release_name
+  repository = "https://codecentric.github.io/helm-charts"
+  chart      = "keycloakx"
+  version    = var.keycloak_chart_version
+  namespace  = kubernetes_namespace.keycloak[0].metadata[0].name
+
+  values = [
+    yamlencode({
+      replicas = 1
+      # Drop the chart's /auth path so Onyxia's issuer-uri matches Keycloak's
+      # discovery document at https://<host>/realms/<realm>.
+      http = {
+        relativePath = "/"
+      }
+      # Bootstrap admin via env vars (KC_BOOTSTRAP_ADMIN_*). H2 in-memory by
+      # default; when keycloak_persist_realm=true a small Postgres lives in
+      # the same namespace and the realm survives restarts.
+      #
+      # The admin password is pulled from a Kubernetes Secret you create
+      # out of band so the value never enters Terraform state or any local
+      # file in this repo. See README "Real Google Identity — Keycloak IdP".
+      command  = ["/opt/keycloak/bin/kc.sh", "start", "--http-enabled=true", "--proxy-headers=xforwarded", "--hostname-strict=false", "--http-relative-path=/"]
+      extraEnv = local.keycloak_extra_env
+      database = var.keycloak_persist_realm ? {
+        vendor            = "postgres"
+        hostname          = "keycloak-db.${var.keycloak_namespace}.svc.cluster.local"
+        port              = 5432
+        database          = "keycloak"
+        username          = "keycloak"
+        existingSecret    = var.keycloak_db_secret_name
+        existingSecretKey = "password"
+      } : { vendor = "dev-mem" }
+      service = {
+        type     = "ClusterIP"
+        httpPort = 80
+      }
+      ingress = { enabled = false }
+      # Autopilot rejects pod anti-affinity below 500m CPU. The chart defaults
+      # apply podAntiAffinity, so we bump CPU rather than override the affinity.
+      resources = {
+        requests = { cpu = "500m", memory = "512Mi" }
+        limits   = { memory = "1024Mi" }
+      }
+    })
+  ]
+
+  wait    = true
+  timeout = var.helm_timeout_seconds
+
+  depends_on = [
+    kubernetes_deployment_v1.keycloak_db,
+    kubernetes_service_v1.keycloak_db,
+  ]
+}
+
+resource "kubernetes_manifest" "keycloak_ingress" {
+  count = var.enable_keycloak ? 1 : 0
+
+  manifest = {
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "Ingress"
+    metadata = {
+      name      = var.keycloak_release_name
+      namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+      annotations = {
+        "cert-manager.io/cluster-issuer"                 = var.cert_manager_cluster_issuer_name
+        "nginx.ingress.kubernetes.io/ssl-redirect"       = "true"
+        "nginx.ingress.kubernetes.io/enable-global-auth" = "false"
+        # CORS so oidc-spa on Onyxia can fetch the discovery document.
+        "nginx.ingress.kubernetes.io/enable-cors"        = "true"
+        "nginx.ingress.kubernetes.io/cors-allow-origin"  = "https://${var.public_hostname}"
+        "nginx.ingress.kubernetes.io/cors-allow-methods" = "GET, POST, OPTIONS"
+        "nginx.ingress.kubernetes.io/cors-allow-headers" = "Authorization, Content-Type, Accept, DPoP, dpop"
+      }
+      labels = {
+        "app.kubernetes.io/name"      = "keycloak"
+        "app.kubernetes.io/component" = "idp"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      ingressClassName = var.services_ingress_class_name
+      tls = [{
+        hosts      = [var.keycloak_hostname]
+        secretName = "keycloak-tls"
+      }]
+      rules = [{
+        host = var.keycloak_hostname
+        http = {
+          paths = [{
+            path     = "/"
+            pathType = "Prefix"
+            backend = {
+              service = {
+                name = "${var.keycloak_release_name}-keycloakx-http"
+                port = { number = 80 }
+              }
+            }
+          }]
+        }
+      }]
+    }
+  }
+
+  depends_on = [helm_release.keycloak]
+}
+
+resource "helm_release" "onyxia" {
+  name       = var.release_name
+  repository = var.chart_repository
+  chart      = var.chart_name
+  version    = var.chart_version
+  namespace  = kubernetes_namespace.onyxia.metadata[0].name
+
+  values = [for values_file in concat([var.values_file], var.extra_values_files) : file(values_file)]
+
+  # Onyxia API CrashLoops until the Keycloak realm 'onyxia' exists; that realm
+  # is created by ./scripts/keycloak-init.sh AFTER this apply finishes (in init/
+  # resume modes of the workflow). So we don't wait for readiness here — the
+  # pod self-heals once the realm shows up.
+  wait    = false
+  timeout = var.helm_timeout_seconds
+  depends_on = [
+    google_compute_global_address.ingress,
+    kubernetes_manifest.managed_certificate,
+    kubernetes_manifest.cert_manager_cluster_issuer,
+    helm_release.services_ingress_nginx
+  ]
+}
+
+resource "kubernetes_config_map" "oauth2_proxy_allowed_emails" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  metadata {
+    name      = "${local.oauth2_proxy_name}-allowed-emails"
+    namespace = kubernetes_namespace.onyxia.metadata[0].name
+
+    labels = {
+      "app.kubernetes.io/name"      = local.oauth2_proxy_name
+      "app.kubernetes.io/component" = "auth"
+      "app.kubernetes.io/part-of"   = var.release_name
+    }
+  }
+
+  data = {
+    "allowed-emails" = local.oauth2_proxy_allowed_emails_file
+  }
+}
+
+resource "kubernetes_manifest" "oauth2_proxy_deployment" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "apps/v1"
+    kind       = "Deployment"
+    metadata = {
+      name      = local.oauth2_proxy_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+      labels = {
+        "app.kubernetes.io/name"      = local.oauth2_proxy_name
+        "app.kubernetes.io/component" = "auth"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      replicas = 1
+      selector = {
+        matchLabels = {
+          "app.kubernetes.io/name" = local.oauth2_proxy_name
+        }
+      }
+      template = {
+        metadata = {
+          labels = {
+            "app.kubernetes.io/name"      = local.oauth2_proxy_name
+            "app.kubernetes.io/component" = "auth"
+            "app.kubernetes.io/part-of"   = var.release_name
+          }
+        }
+        spec = {
+          containers = [
+            {
+              name  = "oauth2-proxy"
+              image = var.oauth2_proxy_image
+              args = concat(
+                [
+                  "--provider=google",
+                  "--http-address=0.0.0.0:4180",
+                  "--redirect-url=${local.oauth2_proxy_redirect_url}",
+                  "--scope=openid email profile",
+                  "--email-domain=*",
+                  "--authenticated-emails-file=/etc/oauth2-proxy/allowed-emails",
+                  "--cookie-secure=true",
+                  "--cookie-httponly=true",
+                  "--cookie-samesite=lax",
+                  "--cookie-refresh=1h",
+                  "--cookie-expire=8h",
+                  "--set-xauthrequest=true",
+                  "--pass-access-token=false",
+                  "--pass-authorization-header=false",
+                  "--reverse-proxy=true",
+                  "--skip-provider-button=true"
+                ],
+                local.oauth2_proxy_cookie_domain_args,
+                local.oauth2_proxy_whitelist_domain_args,
+                ["--upstream=static://202"]
+              )
+              env = [
+                {
+                  name  = "OAUTH2_PROXY_CLIENT_ID"
+                  value = var.oauth2_proxy_client_id
+                },
+                {
+                  name = "OAUTH2_PROXY_CLIENT_SECRET"
+                  valueFrom = {
+                    secretKeyRef = {
+                      name = var.oauth2_proxy_secret_name
+                      key  = "client-secret"
+                    }
+                  }
+                },
+                {
+                  name = "OAUTH2_PROXY_COOKIE_SECRET"
+                  valueFrom = {
+                    secretKeyRef = {
+                      name = var.oauth2_proxy_secret_name
+                      key  = "cookie-secret"
+                    }
+                  }
+                }
+              ]
+              ports = [
+                {
+                  name          = "http"
+                  containerPort = 4180
+                }
+              ]
+              readinessProbe = {
+                httpGet = {
+                  path = "/ping"
+                  port = "http"
+                }
+              }
+              livenessProbe = {
+                httpGet = {
+                  path = "/ping"
+                  port = "http"
+                }
+              }
+              resources = {
+                requests = {
+                  cpu                 = "50m"
+                  memory              = "64Mi"
+                  "ephemeral-storage" = "64Mi"
+                }
+                limits = {
+                  memory              = "128Mi"
+                  "ephemeral-storage" = "64Mi"
+                }
+              }
+              volumeMounts = [
+                {
+                  name      = "allowed-emails"
+                  mountPath = "/etc/oauth2-proxy"
+                  readOnly  = true
+                }
+              ]
+            }
+          ]
+          volumes = [
+            {
+              name = "allowed-emails"
+              configMap = {
+                name = kubernetes_config_map.oauth2_proxy_allowed_emails[0].metadata[0].name
+                items = [
+                  {
+                    key  = "allowed-emails"
+                    path = "allowed-emails"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+
+  depends_on = [helm_release.onyxia]
+}
+
+resource "kubernetes_manifest" "oauth2_proxy_service" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "v1"
+    kind       = "Service"
+    metadata = {
+      name      = local.oauth2_proxy_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+      labels = {
+        "app.kubernetes.io/name"      = local.oauth2_proxy_name
+        "app.kubernetes.io/component" = "auth"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      type = "ClusterIP"
+      selector = {
+        "app.kubernetes.io/name" = local.oauth2_proxy_name
+      }
+      ports = [
+        {
+          name       = "http"
+          port       = 80
+          targetPort = "http"
+        }
+      ]
+    }
+  }
+
+  depends_on = [kubernetes_manifest.oauth2_proxy_deployment]
+}
+
+resource "kubernetes_config_map" "auth_gateway_nginx" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  metadata {
+    name      = "${local.auth_gateway_name}-nginx"
+    namespace = kubernetes_namespace.onyxia.metadata[0].name
+
+    labels = {
+      "app.kubernetes.io/name"      = local.auth_gateway_name
+      "app.kubernetes.io/component" = "gateway"
+      "app.kubernetes.io/part-of"   = var.release_name
+    }
+  }
+
+  data = {
+    "default.conf" = local.auth_gateway_nginx_config
+  }
+}
+
+resource "kubernetes_manifest" "auth_gateway_deployment" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "apps/v1"
+    kind       = "Deployment"
+    metadata = {
+      name      = local.auth_gateway_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+      labels = {
+        "app.kubernetes.io/name"      = local.auth_gateway_name
+        "app.kubernetes.io/component" = "gateway"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      replicas = 1
+      selector = {
+        matchLabels = {
+          "app.kubernetes.io/name" = local.auth_gateway_name
+        }
+      }
+      template = {
+        metadata = {
+          labels = {
+            "app.kubernetes.io/name"      = local.auth_gateway_name
+            "app.kubernetes.io/component" = "gateway"
+            "app.kubernetes.io/part-of"   = var.release_name
+          }
+        }
+        spec = {
+          containers = [
+            {
+              name  = "nginx"
+              image = var.auth_gateway_nginx_image
+              ports = [
+                {
+                  name          = "http"
+                  containerPort = 8080
+                }
+              ]
+              readinessProbe = {
+                httpGet = {
+                  path = "/healthz"
+                  port = "http"
+                }
+              }
+              livenessProbe = {
+                httpGet = {
+                  path = "/healthz"
+                  port = "http"
+                }
+              }
+              resources = {
+                requests = {
+                  cpu                 = "50m"
+                  memory              = "64Mi"
+                  "ephemeral-storage" = "64Mi"
+                }
+                limits = {
+                  memory              = "128Mi"
+                  "ephemeral-storage" = "64Mi"
+                }
+              }
+              volumeMounts = [
+                {
+                  name      = "nginx-config"
+                  mountPath = "/etc/nginx/conf.d"
+                  readOnly  = true
+                }
+              ]
+            }
+          ]
+          volumes = [
+            {
+              name = "nginx-config"
+              configMap = {
+                name = kubernetes_config_map.auth_gateway_nginx[0].metadata[0].name
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+
+  depends_on = [helm_release.onyxia, kubernetes_manifest.oauth2_proxy_service]
+}
+
+resource "kubernetes_manifest" "auth_gateway_backend_config" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "cloud.google.com/v1"
+    kind       = "BackendConfig"
+    metadata = {
+      name      = local.auth_gateway_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+    }
+    spec = {
+      healthCheck = {
+        type               = "HTTP"
+        requestPath        = "/healthz"
+        port               = 8080
+        checkIntervalSec   = 15
+        timeoutSec         = 5
+        healthyThreshold   = 1
+        unhealthyThreshold = 2
+      }
+    }
+  }
+}
+
+resource "kubernetes_manifest" "auth_gateway_service" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "v1"
+    kind       = "Service"
+    metadata = {
+      name      = local.auth_gateway_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+      annotations = {
+        "cloud.google.com/backend-config" = jsonencode({ default = local.auth_gateway_name })
+        "cloud.google.com/neg"            = jsonencode({ ingress = true })
+      }
+      labels = {
+        "app.kubernetes.io/name"      = local.auth_gateway_name
+        "app.kubernetes.io/component" = "gateway"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      type = "ClusterIP"
+      selector = {
+        "app.kubernetes.io/name" = local.auth_gateway_name
+      }
+      ports = [
+        {
+          name       = "http"
+          port       = 80
+          targetPort = "http"
+        }
+      ]
+    }
+  }
+
+  depends_on = [
+    kubernetes_manifest.auth_gateway_backend_config,
+    kubernetes_manifest.auth_gateway_deployment
+  ]
+}
+
+resource "kubernetes_manifest" "auth_gateway_ingress" {
+  count = var.enable_oauth2_proxy_gateway ? 1 : 0
+
+  manifest = {
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "Ingress"
+    metadata = {
+      name      = var.release_name
+      namespace = kubernetes_namespace.onyxia.metadata[0].name
+      annotations = {
+        "cert-manager.io/cluster-issuer"           = var.cert_manager_cluster_issuer_name
+        "nginx.ingress.kubernetes.io/ssl-redirect" = "true"
+        # ingress-nginx is configured cluster-wide with a `global-auth-url`
+        # so that user services inherit the oauth2-proxy auth_request. The
+        # gateway Ingress itself must opt out, otherwise /oauth2/start would
+        # require authentication and the browser loops on ERR_TOO_MANY_REDIRECTS.
+        "nginx.ingress.kubernetes.io/enable-global-auth" = "false"
+      }
+      labels = {
+        "app.kubernetes.io/name"      = local.auth_gateway_name
+        "app.kubernetes.io/component" = "gateway"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      ingressClassName = var.services_ingress_class_name
+      tls = [
+        {
+          hosts      = [var.public_hostname]
+          secretName = "${var.release_name}-tls"
+        }
+      ]
+      defaultBackend = {
+        service = {
+          name = local.auth_gateway_name
+          port = {
+            number = 80
+          }
+        }
+      }
+      rules = [
+        {
+          host = var.public_hostname
+          http = {
+            paths = [
+              {
+                path     = "/"
+                pathType = "Prefix"
+                backend = {
+                  service = {
+                    name = local.auth_gateway_name
+                    port = {
+                      number = 80
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+
+  depends_on = [
+    helm_release.onyxia,
+    kubernetes_manifest.cert_manager_cluster_issuer,
+    kubernetes_manifest.auth_gateway_service,
+    helm_release.services_ingress_nginx
+  ]
+}
