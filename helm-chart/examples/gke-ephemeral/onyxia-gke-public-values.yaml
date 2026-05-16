@@ -90,3 +90,70 @@ api:
         user: true
         project: false
       multipleServicesMode: latest
+
+    - id: databases
+      name:
+        en: Databases
+        fr: Bases de données
+      maintainer: innovation@insee.fr
+      # Mirror hosted on InseeFrLab Nexus (public, no auth). Identical content
+      # to https://inseefrlab.github.io/helm-charts-databases.
+      location: https://nexus.lab.sspcloud.fr/repository/inseefrlab-helm-charts-databases
+      status: PROD
+      highlightedCharts:
+        - postgresql-cnpg
+        - postgresql
+        - mongodb
+        - neo4j
+        - nocodb
+        - kafka
+        - qdrant
+        - pgadmin
+        - opensearch
+        - openrefine
+      type: helm
+      skipTlsVerify: false
+      allowSharing: false
+      visible:
+        user: true
+        project: true
+      multipleServicesMode: latest
+
+    - id: dataviz
+      name:
+        en: Dataviz & BI
+        fr: Dataviz & BI
+      maintainer: innovation@insee.fr
+      location: https://nexus.lab.sspcloud.fr/repository/inseefrlab-helm-charts-datavisualization
+      status: PROD
+      highlightedCharts:
+        - superset
+        - metabase
+      type: helm
+      skipTlsVerify: false
+      allowSharing: false
+      visible:
+        user: true
+        project: true
+      multipleServicesMode: latest
+
+    - id: automation
+      name:
+        en: Automation, MLOps, annotation
+        fr: Automation, MLOps, annotation
+      maintainer: innovation@insee.fr
+      location: https://nexus.lab.sspcloud.fr/repository/inseefrlab-helm-charts-automation
+      status: PROD
+      highlightedCharts:
+        - airflow
+        - mlflow
+        - label-studio
+        - argilla
+        - langfuse
+      type: helm
+      skipTlsVerify: false
+      allowSharing: false
+      visible:
+        user: true
+        project: true
+      multipleServicesMode: latest
