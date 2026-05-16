@@ -118,3 +118,42 @@ Expected delta on the example's daily cost: **~$0.30/day** when `enable_lakekeep
 ## Next step
 
 Once approved, invoke `superpowers:writing-plans` to break this down into the TF + chart + keycloak-init delta. Implementation depends on the GCS storage spec landing first (warehouses need a bucket).
+
+---
+
+## Amendments — subagent review (2026-05-16)
+
+Verified against Lakekeeper docs (0.10 + nightly), Polaris graduation announcement, Trino native-GCS docs, Onyxia API source, SSPCloud's live config. Five corrections.
+
+**Correction 1 — Vended credentials on GCS work, but they're not HMAC.** Lakekeeper 0.8+ mints **GCP STS downscoped OAuth2 tokens** (`sts-enabled: true`), short-lived (1 h), scoped to the warehouse path. PyIceberg 0.6+, Trino 449+, Spark 3.5+ all accept them on `gs://`. **Consequence:** the engines do NOT need HMAC keys. Keep HMAC only for the "raw boto3 from notebook" path (covered by the GCS spec). Two cred surfaces, each shaped right.
+
+**Correction 2 — OpenFGA is a separate pod, not embedded SQLite.** The Lakekeeper Helm chart deploys OpenFGA as its own deployment, with its own Postgres (the upstream chart packages it that way). Budget: +1 pod ~50m CPU + 1 small DB.
+
+**Correction 3 — Onyxia API has no typed `region.data.S3.iceberg.warehouse` field.** The spec's claim was wrong. SSPCloud configures Iceberg via a **sibling array** `region.iceberg[]` (visible in `https://datalab.sspcloud.fr/api/public/configuration`). Concretely the env vars we want on launched services (`ICEBERG_REST_URI`, `ICEBERG_REST_WAREHOUSE`) come from the Helm chart's `serviceLauncher` extraEnv, not a typed Onyxia field.
+
+**Correction 4 — Use Trino 481+ native GCS, not legacy `hive.gcs.*`.** `fs.native-gcs.enabled=true` + `iceberg.catalog.type=rest` + auth `ACCESS_TOKEN` consumes Lakekeeper's vended STS token directly. Pass `gcs.project-id=${GOOGLE_CLOUD_PROJECT}` from env.
+
+**Correction 5 — SSPCloud uses Polaris in prod, not Lakekeeper.** Real prod path = `polaris.lab.sspcloud.fr` (Apache Polaris graduated 2026-02). For the ephemeral GKE demo Lakekeeper still wins on footprint, but document the "production migration = Polaris" exit.
+
+### Updated cost
+
+- Lakekeeper pod ~50m + 200m cnpg + ~50m OpenFGA + ~50m OpenFGA-pg = **~$0.40/day** (the spec said $0.30; OpenFGA is a pod, not embedded).
+
+### Updated arbitration
+
+| | Option A — Lakekeeper (ephemeral pick) | Option B — Apache Polaris (SSPCloud-fidelity) |
+|---|---|---|
+| $/day | ~$0.40 | ~$0.80–1.00 |
+| Pod memory | ~512Mi total | ~1.5Gi total |
+| Multi-tenancy | warehouse-per-user + OpenFGA ABAC | warehouse-per-user + Polaris RBAC |
+| Auth | OIDC native (Keycloak first-class) | OIDC native |
+| Helm chart maturity | community, fast cadence | community, stable |
+| Prod path | swap to Polaris later | already prod |
+
+Recommendation: **A for v1**, document Polaris as the migration target.
+
+### Risks (updated)
+
+- Keycloak `audience-mapper` must add both `onyxia` AND `lakekeeper` to user tokens, otherwise Lakekeeper 401s silently.
+- Trino `fs.native-gcs.enabled` requires Trino ≥ 468. The `inseefrlab/trino` chart pin must allow that.
+- Spark deployment is **out of scope** of this spec. Open a separate brainstorm for `apache/spark-kubernetes-operator` 0.7.0 (Apache TLP Jan 2026) before users actually try to write Iceberg from Spark.
