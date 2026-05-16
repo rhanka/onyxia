@@ -577,6 +577,350 @@ resource "kubernetes_manifest" "keycloak_ingress" {
   depends_on = [helm_release.keycloak]
 }
 
+# ----------------------------------------------------------------------------
+# Optional Apache Polaris Iceberg catalog (Section 1+2 of the implementation
+# plan in docs/superpowers/plans/2026-05-16-iceberg-polaris-plan.md).
+#
+# Topology (toggle: enable_polaris):
+#   - namespace polaris
+#   - polaris-db: single-pod postgres:16-alpine (Polaris metastore)
+#   - polaris-0: apache/polaris:<image_tag> Deployment + Service
+#   - polaris Ingress: ingress-nginx + cert-manager
+#
+# Keycloak client + audience mapper are added by scripts/keycloak-init.sh.
+# The "onyxia" catalog object (storage-config-info pointing at GCS) is
+# created by scripts/polaris-init.sh after the pod is Ready; it lives there
+# rather than in Terraform because Polaris validates the warehouse root at
+# create-time and the bucket is delivered by a sibling branch.
+# ----------------------------------------------------------------------------
+
+resource "kubernetes_namespace" "polaris" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name = var.polaris_namespace
+
+    labels = {
+      app       = "onyxia"
+      component = "polaris"
+      example   = "gke-ephemeral"
+    }
+  }
+}
+
+resource "kubernetes_persistent_volume_claim_v1" "polaris_db" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = "polaris-db"
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+  }
+  spec {
+    access_modes = ["ReadWriteOnce"]
+    resources {
+      requests = { storage = "1Gi" }
+    }
+  }
+  wait_until_bound = false
+}
+
+resource "kubernetes_deployment_v1" "polaris_db" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = "polaris-db"
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+    labels    = { app = "polaris-db" }
+  }
+  spec {
+    replicas = 1
+    strategy { type = "Recreate" }
+    selector { match_labels = { app = "polaris-db" } }
+    template {
+      metadata { labels = { app = "polaris-db" } }
+      spec {
+        container {
+          name  = "postgres"
+          image = "postgres:16-alpine"
+          env {
+            name  = "POSTGRES_DB"
+            value = "polaris"
+          }
+          env {
+            name  = "POSTGRES_USER"
+            value = "polaris"
+          }
+          env {
+            name = "POSTGRES_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = var.polaris_db_secret_name
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "PGDATA"
+            value = "/var/lib/postgresql/data/pgdata"
+          }
+          port {
+            container_port = 5432
+            name           = "tcp-postgres"
+          }
+          resources {
+            requests = { cpu = "100m", memory = "256Mi" }
+            limits   = { memory = "512Mi" }
+          }
+          volume_mount {
+            name       = "data"
+            mount_path = "/var/lib/postgresql/data"
+          }
+          readiness_probe {
+            exec { command = ["pg_isready", "-U", "polaris"] }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
+        }
+        volume {
+          name = "data"
+          persistent_volume_claim {
+            claim_name = "polaris-db"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service_v1" "polaris_db" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = "polaris-db"
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+  }
+  spec {
+    selector = { app = "polaris-db" }
+    port {
+      port        = 5432
+      target_port = 5432
+      name        = "tcp-postgres"
+    }
+  }
+}
+
+# Workload-Identity-enabled ServiceAccount used by Polaris when storage is
+# wired (enable_polaris_storage=true). Stays present (but un-annotated) when
+# storage is off so the Deployment can always mount the same SA name.
+resource "kubernetes_service_account_v1" "polaris" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = var.polaris_release_name
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+
+    annotations = var.enable_polaris_storage && var.polaris_warehouse_gsa_email != "" ? {
+      "iam.gke.io/gcp-service-account" = var.polaris_warehouse_gsa_email
+    } : {}
+
+    labels = {
+      "app.kubernetes.io/name"      = "polaris"
+      "app.kubernetes.io/component" = "catalog"
+      "app.kubernetes.io/part-of"   = var.release_name
+    }
+  }
+}
+
+resource "kubernetes_deployment_v1" "polaris" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = var.polaris_release_name
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"      = "polaris"
+      "app.kubernetes.io/component" = "catalog"
+      "app.kubernetes.io/part-of"   = var.release_name
+    }
+  }
+  spec {
+    replicas = 1
+    strategy { type = "Recreate" }
+    selector {
+      match_labels = {
+        "app.kubernetes.io/name" = "polaris"
+      }
+    }
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name"      = "polaris"
+          "app.kubernetes.io/component" = "catalog"
+          "app.kubernetes.io/part-of"   = var.release_name
+        }
+      }
+      spec {
+        service_account_name = kubernetes_service_account_v1.polaris[0].metadata[0].name
+        container {
+          name  = "polaris"
+          image = var.polaris_image
+          # Polaris reads its config from env vars (Quarkus-style). The full
+          # OIDC + storage config is templated by scripts/polaris-init.sh
+          # post-boot; these are the bare-minimum boot vars so the pod can
+          # come up Ready before the bootstrap job runs.
+          env {
+            name  = "QUARKUS_DATASOURCE_JDBC_URL"
+            value = "jdbc:postgresql://polaris-db.${var.polaris_namespace}.svc.cluster.local:5432/polaris"
+          }
+          env {
+            name  = "QUARKUS_DATASOURCE_USERNAME"
+            value = "polaris"
+          }
+          env {
+            name = "QUARKUS_DATASOURCE_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = var.polaris_db_secret_name
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "POLARIS_AUTHENTICATION_TYPE"
+            value = "external"
+          }
+          env {
+            name  = "POLARIS_OIDC_ISSUER"
+            value = var.enable_keycloak && var.keycloak_hostname != "" ? "https://${var.keycloak_hostname}/realms/onyxia" : ""
+          }
+          env {
+            name  = "POLARIS_OIDC_JWKS_URI"
+            value = var.enable_keycloak && var.keycloak_hostname != "" ? "https://${var.keycloak_hostname}/realms/onyxia/protocol/openid-connect/certs" : ""
+          }
+          env {
+            name  = "POLARIS_OIDC_AUDIENCE"
+            value = "polaris"
+          }
+          env {
+            name  = "POLARIS_OIDC_PRINCIPAL_CLAIM"
+            value = "preferred_username"
+          }
+          port {
+            name           = "http"
+            container_port = 8181
+          }
+          port {
+            name           = "mgmt"
+            container_port = 8182
+          }
+          readiness_probe {
+            http_get {
+              path = "/q/health/ready"
+              port = "mgmt"
+            }
+            initial_delay_seconds = 10
+            period_seconds        = 10
+          }
+          liveness_probe {
+            http_get {
+              path = "/q/health/live"
+              port = "mgmt"
+            }
+            initial_delay_seconds = 30
+            period_seconds        = 30
+          }
+          resources {
+            requests = { cpu = "500m", memory = "1Gi" }
+            limits   = { memory = "1536Mi" }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    kubernetes_service_v1.polaris_db,
+    kubernetes_deployment_v1.polaris_db,
+  ]
+}
+
+resource "kubernetes_service_v1" "polaris" {
+  count = var.enable_polaris ? 1 : 0
+
+  metadata {
+    name      = var.polaris_release_name
+    namespace = kubernetes_namespace.polaris[0].metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"      = "polaris"
+      "app.kubernetes.io/component" = "catalog"
+      "app.kubernetes.io/part-of"   = var.release_name
+    }
+  }
+  spec {
+    selector = {
+      "app.kubernetes.io/name" = "polaris"
+    }
+    port {
+      name        = "http"
+      port        = 80
+      target_port = "http"
+    }
+  }
+}
+
+resource "kubernetes_manifest" "polaris_ingress" {
+  count = var.enable_polaris ? 1 : 0
+
+  manifest = {
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "Ingress"
+    metadata = {
+      name      = var.polaris_release_name
+      namespace = var.polaris_namespace
+      annotations = {
+        "cert-manager.io/cluster-issuer"                 = var.cert_manager_cluster_issuer_name
+        "nginx.ingress.kubernetes.io/ssl-redirect"       = "true"
+        "nginx.ingress.kubernetes.io/enable-global-auth" = "false"
+        # CORS so PyIceberg / Spark / Trino running in user namespaces can
+        # POST to /api/catalog from a browser-launched notebook.
+        "nginx.ingress.kubernetes.io/enable-cors"        = "true"
+        "nginx.ingress.kubernetes.io/cors-allow-origin"  = "https://${var.public_hostname}"
+        "nginx.ingress.kubernetes.io/cors-allow-methods" = "GET, POST, PUT, DELETE, OPTIONS"
+        "nginx.ingress.kubernetes.io/cors-allow-headers" = "Authorization, Content-Type, Accept, X-Iceberg-Access-Delegation"
+      }
+      labels = {
+        "app.kubernetes.io/name"      = "polaris"
+        "app.kubernetes.io/component" = "catalog"
+        "app.kubernetes.io/part-of"   = var.release_name
+      }
+    }
+    spec = {
+      ingressClassName = var.services_ingress_class_name
+      tls = [{
+        hosts      = [var.polaris_hostname]
+        secretName = "polaris-tls"
+      }]
+      rules = [{
+        host = var.polaris_hostname
+        http = {
+          paths = [{
+            path     = "/"
+            pathType = "Prefix"
+            backend = {
+              service = {
+                name = var.polaris_release_name
+                port = { number = 80 }
+              }
+            }
+          }]
+        }
+      }]
+    }
+  }
+
+  depends_on = [kubernetes_service_v1.polaris]
+}
+
 resource "helm_release" "onyxia" {
   name       = var.release_name
   repository = var.chart_repository

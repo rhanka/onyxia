@@ -67,6 +67,16 @@ export TF_VAR_keycloak_persist_realm="${KEYCLOAK_PERSIST_REALM:-true}"
 export TF_VAR_enable_oauth2_proxy_gateway="${ENABLE_OAUTH2_PROXY_GATEWAY:-false}"
 export TF_VAR_services_ingress_nginx_oauth2_auth="${ENABLE_OAUTH2_GLOBAL_AUTH:-false}"
 
+# Apache Polaris (Iceberg catalog). Off by default — see README "Lakehouse
+# Iceberg via Polaris". When ENABLE_POLARIS=true, a Postgres + Polaris pod +
+# Ingress land in the polaris namespace. The companion GCS storage config
+# (ENABLE_POLARIS_STORAGE) waits for the brainstorm/gcs-buckets branch.
+export TF_VAR_enable_polaris="${ENABLE_POLARIS:-false}"
+export TF_VAR_polaris_hostname="${POLARIS_HOSTNAME:-}"
+export TF_VAR_enable_polaris_storage="${ENABLE_POLARIS_STORAGE:-false}"
+export TF_VAR_polaris_warehouse_bucket="${POLARIS_WAREHOUSE_BUCKET:-}"
+export TF_VAR_polaris_warehouse_gsa_email="${POLARIS_WAREHOUSE_GSA_EMAIL:-}"
+
 # Generate the gitignored Onyxia values file from the committed template.
 TEMPLATE="${EXAMPLE_DIR}/onyxia-private-values.local.yaml.tmpl"
 TARGET="${EXAMPLE_DIR}/onyxia-private-values.local.yaml"

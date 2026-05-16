@@ -282,6 +282,85 @@ variable "keycloak_persist_realm" {
   default     = false
 }
 
+# ---------------------------------------------------------------------------
+# Optional Apache Polaris Iceberg catalog. When enable_polaris=true:
+#   - a dedicated Postgres (single Deployment) is provisioned in the
+#     polaris namespace as the Polaris metastore,
+#   - apache/polaris:<polaris_image_tag> runs in that namespace,
+#   - an Ingress exposes it under polaris_hostname with TLS by cert-manager,
+#   - keycloak-init.sh registers a confidential client + audience mapper
+#     so Onyxia user tokens carry `aud: polaris`.
+#
+# Keep enable_polaris=false until the GCS warehouse bucket (delivered by the
+# brainstorm/gcs-buckets branch) is wired into enable_polaris_storage.
+# ---------------------------------------------------------------------------
+
+variable "enable_polaris" {
+  type        = bool
+  description = "Deploy Apache Polaris as the Iceberg REST catalog in front of GCS. Disabled by default while the GCS bucket pre-req lands."
+  default     = false
+}
+
+variable "polaris_namespace" {
+  type        = string
+  description = "Namespace for the Apache Polaris deployment."
+  default     = "polaris"
+}
+
+variable "polaris_release_name" {
+  type        = string
+  description = "Logical name for Polaris workloads (Deployment / Service / Ingress share this prefix)."
+  default     = "polaris"
+}
+
+variable "polaris_image" {
+  type        = string
+  description = "Apache Polaris container image (pinned). Switch to the helm chart once apache/polaris-helm is published."
+  default     = "apache/polaris:1.0.0"
+}
+
+variable "polaris_hostname" {
+  type        = string
+  description = "Public hostname Polaris is served on (e.g. polaris.onyxia.example.com). Required when enable_polaris is true."
+  default     = ""
+
+  validation {
+    condition     = !var.enable_polaris || var.polaris_hostname != ""
+    error_message = "polaris_hostname must be set when enable_polaris is true."
+  }
+}
+
+variable "polaris_db_secret_name" {
+  type        = string
+  description = "Name of a pre-created Kubernetes Secret in the Polaris namespace holding the Postgres password under key 'password'. Create it out of band."
+  default     = "polaris-db"
+}
+
+# --- Storage (GCS) — STUB until brainstorm/gcs-buckets lands ----------------
+# The Polaris catalog object that points at the GCS warehouse is created by
+# scripts/polaris-init.sh, NOT by Terraform. To exercise the Polaris stack in
+# isolation (no bucket yet) keep enable_polaris_storage=false. The audit step
+# (Section 4 of the implementation plan) flips this to true once the bucket
+# and Workload Identity binding from brainstorm/gcs-buckets are merged.
+
+variable "enable_polaris_storage" {
+  type        = bool
+  description = "Wire Polaris to a GCS warehouse bucket. STUB: set to true only after brainstorm/gcs-buckets has been merged and the bucket + GSA exist."
+  default     = false
+}
+
+variable "polaris_warehouse_bucket" {
+  type        = string
+  description = "Name of the GCS bucket used as the Polaris warehouse root (no gs:// prefix). Populated by brainstorm/gcs-buckets."
+  default     = ""
+}
+
+variable "polaris_warehouse_gsa_email" {
+  type        = string
+  description = "Email of the GCP service account Polaris impersonates to mint vended STS tokens against the warehouse bucket. Populated by brainstorm/gcs-buckets."
+  default     = ""
+}
+
 variable "local_port" {
   type        = number
   description = "Local port used by the local same-origin proxy output."
