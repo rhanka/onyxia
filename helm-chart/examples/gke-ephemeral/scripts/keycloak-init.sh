@@ -17,6 +17,9 @@
 # Optional env:
 #   KEYCLOAK_NAMESPACE    Default: keycloak
 #   KEYCLOAK_POD          Default: keycloak-keycloakx-0
+#   ENABLE_POLARIS        Default: false. When true, also register a
+#                         confidential client `polaris` + audience mapper so
+#                         Onyxia user tokens carry `aud: polaris`.
 set -euo pipefail
 
 KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
@@ -81,6 +84,36 @@ kc_safe_create "identity-provider google" create identity-provider/instances -r 
   -s "config.clientId=$GOOGLE_CLIENT_ID" \
   -s "config.clientSecret=$GOOGLE_CLIENT_SECRET" \
   -s 'config.useJwksUrl=true'
+
+if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
+  echo "[init-kc] (polaris) create client polaris (confidential) (idempotent)..."
+  # Polaris validates JWTs with audience=polaris. The chart-side env var
+  # POLARIS_OIDC_AUDIENCE matches this clientId. publicClient=false so
+  # we can later attach a client-scope audience mapper (server-side mappers
+  # only run on confidential clients in Keycloak 24+).
+  kc_safe_create "client polaris" create clients -r onyxia \
+    -s clientId=polaris -s publicClient=false \
+    -s standardFlowEnabled=false -s serviceAccountsEnabled=true \
+    -s directAccessGrantsEnabled=false \
+    -s 'attributes."access.token.lifespan"=3600'
+
+  echo "[init-kc] (polaris) ensure audience mapper on client onyxia (idempotent)..."
+  # Find the onyxia client UUID — needed to address its protocolMappers.
+  onyxia_client_uuid="$("${KCADM[@]}" get clients -r onyxia -q clientId=onyxia --fields id --format csv --noquotes | tail -n1)"
+  if [ -z "${onyxia_client_uuid}" ]; then
+    echo "[init-kc] WARN: could not resolve clientId=onyxia UUID; skipping audience mapper" >&2
+  else
+    # Re-create is idempotent because mapper names are unique per client and
+    # `kc_safe_create` swallows the "already exists" error.
+    kc_safe_create "audience-mapper polaris on onyxia" create "clients/${onyxia_client_uuid}/protocol-mappers/models" -r onyxia \
+      -s name=polaris-audience \
+      -s protocol=openid-connect \
+      -s protocolMapper=oidc-audience-mapper \
+      -s 'config."included.client.audience"=polaris' \
+      -s 'config."id.token.claim"=false' \
+      -s 'config."access.token.claim"=true'
+  fi
+fi
 
 echo "[init-kc] done. Discovery doc:"
 curl -s --max-time 10 "https://${KEYCLOAK_HOSTNAME}/realms/onyxia/.well-known/openid-configuration" \
