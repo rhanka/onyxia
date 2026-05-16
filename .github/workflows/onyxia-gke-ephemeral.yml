@@ -111,7 +111,15 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       # ---------------- resume + init: apply app + post-config ----------------
-      - name: Apply app layer
+      # Two-phase apply: cert-manager Helm release first (installs the
+      # ClusterIssuer CRD), then the rest. Without this, plan-time validation
+      # of kubernetes_manifest.cert_manager_cluster_issuer fails on a cold
+      # cluster where the CRD doesn't exist yet.
+      - name: Apply app layer — phase 1 (cert-manager CRDs)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: ./scripts/_tofu.sh app apply -input=false -auto-approve -target=helm_release.cert_manager
+
+      - name: Apply app layer — phase 2 (full)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
         run: ./scripts/_tofu.sh app apply -input=false -auto-approve
 
