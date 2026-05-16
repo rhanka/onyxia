@@ -138,3 +138,58 @@ Once approved, invoke `superpowers:writing-plans` to slice the work into:
 3. `onyxia-private-values.local.yaml.tmpl` placeholders + values pipe.
 4. README "Brand it" section.
 5. GHA workflow step to run the generator in `init`/`resume`.
+
+---
+
+## Amendments — subagent review (2026-05-16)
+
+Verified against npm registry, onyxia-ui source, sent-tech-design-system GitHub. Four corrections.
+
+**Correction 1 — The npm package exists and we know its shape.**
+- `@sentropic/design-system-themes@0.5.0` is on the public npm registry (owner `rhk`, no license field — must be added before strict-CI installs).
+- Peer dep: `@sentropic/design-system-tokens@0.5.0`.
+- Source: `github.com/rhanka/sent-tech-design-system` (monorepo).
+- Exports `TenantTheme` objects: `{ id, label, mode, tokens: { semantic, component } }`.
+- Concrete `semantic` keys: `surface.{default,subtle,raised,inverse,overlay}`, `text.{primary,secondary,muted,inverse,link}`, `border.{subtle,strong,interactive}`, `action.{primary,primaryText,secondary,secondaryText,danger}`, `feedback.{success,warning,error,info}`.
+
+**Correction 2 — Onyxia palette shape is NOT `light.surfaces` / `light.text`.** The actual contract from `onyxia-ui/src/lib/color.urgent.ts`:
+
+- `focus: { main, light, light2 }`
+- `dark: { main, light, greyVariant1..greyVariant5 }`
+- `light: { main, light, greyVariant1..greyVariant5 }`
+- `redError | greenSuccess | orangeWarning | blueInfo: { main, light }`
+
+Both light/dark palettes are two halves of one tree, not two separate trees. `PALETTE_OVERRIDE_LIGHT` overrides `{light, focus, …}` for light mode; `PALETTE_OVERRIDE_DARK` overrides `{dark, …}`. Onyxia parses the value as **JSON5** (per `web/src/env.ts`), unquoted keys allowed.
+
+### Updated mapping table
+
+| Onyxia key | Sentropic token |
+|---|---|
+| `focus.main` | `semantic.action.primary` |
+| `focus.light` | `semantic.action.primaryText` (or a tint) |
+| `light.main` | `semantic.surface.default` |
+| `light.greyVariant1..5` | `semantic.surface.{subtle,raised,inverse,overlay}` |
+| `dark.main` (body text in light mode) | `semantic.text.primary` |
+| `redError.main` | `semantic.feedback.error` |
+| `greenSuccess.main` | `semantic.feedback.success` |
+| `FONT.fontFamily` | `tokens.typography.fontFamily.sans` |
+| `FONT.dirUrl` | jsdelivr URL prefix (see below) |
+
+**Correction 3 — Onyxia paints colors via JS (MUI runtime), not CSS variables.** The sentropic `[data-st-theme="sent-tech"]` CSS file is incompatible — Onyxia ignores it. The generator MUST read the JS theme object (`require('@sentropic/design-system-themes')`), not the `.css`.
+
+**Correction 4 — Font hosting via jsdelivr from GitHub.** Default reco: `https://cdn.jsdelivr.net/gh/rhanka/sent-tech-design-system@v0.5.0/packages/themes/fonts/<file>.woff2`. The published npm tarball does NOT contain a `fonts/` dir today, so `cdn.jsdelivr.net/npm/...` would 404 until that's fixed. Logo can use a `data:` URI or jsdelivr-from-GitHub the same way.
+
+### Updated arbitration
+
+| | Option A — Tokens via env vars only (v1) | Option B — Fork `onyxia-ui` |
+|---|---|---|
+| Coverage | colors + fonts + logo + header strings | + button radius, component shape, custom layout |
+| Time to ship | ~2 h (write generator, validate mapping) | ~1 week |
+| Maintenance | redeploy on sentropic bump | track onyxia-ui upstream + sentropic |
+
+Recommendation: **A for v1**. Document shape as a v2 follow-up.
+
+### Risks (updated)
+
+- `@sentropic/design-system-themes@0.5.0` has no SPDX license. Either add one upstream (in `rhanka/sent-tech-design-system`) or pin via `npmrc` config that allows missing-license installs in CI. Recommended fix: add `"license": "MIT"` to the package.
+- The two `@sentropic/*` packages are pinned to the same exact version (no `^`); bumping is a coordinated release.
