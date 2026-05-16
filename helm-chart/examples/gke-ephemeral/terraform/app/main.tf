@@ -73,6 +73,24 @@ locals {
     } : {}
   )
 
+  keycloak_extra_env_common = <<-EOT
+    - name: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: admin
+    - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: ${var.keycloak_admin_secret_name}
+          key: password
+    - name: KC_HOSTNAME
+      value: https://${var.keycloak_hostname}
+    - name: KC_HTTP_ENABLED
+      value: "true"
+    - name: KC_PROXY_HEADERS
+      value: xforwarded
+  EOT
+
+  keycloak_extra_env = local.keycloak_extra_env_common
+
   auth_gateway_nginx_config = <<-EOT
     server {
       listen 8080;
@@ -342,6 +360,113 @@ resource "kubernetes_namespace" "keycloak" {
   }
 }
 
+# ------- Optional Postgres backend for Keycloak (realm persistence) ---------
+# When keycloak_persist_realm=true, a tiny single-pod Postgres is deployed in
+# the Keycloak namespace. Cheap (~$0.30/d) and makes the Keycloak realm
+# survive pod restarts. Realms/clients/IdPs configured by keycloak-init.sh
+# stay there across redeploys.
+
+resource "kubernetes_persistent_volume_claim_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+  }
+  spec {
+    access_modes = ["ReadWriteOnce"]
+    resources {
+      requests = { storage = "2Gi" }
+    }
+  }
+  wait_until_bound = false
+}
+
+resource "kubernetes_deployment_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+    labels    = { app = "keycloak-db" }
+  }
+  spec {
+    replicas = 1
+    strategy { type = "Recreate" }
+    selector { match_labels = { app = "keycloak-db" } }
+    template {
+      metadata { labels = { app = "keycloak-db" } }
+      spec {
+        container {
+          name  = "postgres"
+          image = "postgres:16-alpine"
+          env {
+            name  = "POSTGRES_DB"
+            value = "keycloak"
+          }
+          env {
+            name  = "POSTGRES_USER"
+            value = "keycloak"
+          }
+          env {
+            name = "POSTGRES_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = var.keycloak_db_secret_name
+                key  = "password"
+              }
+            }
+          }
+          env {
+            name  = "PGDATA"
+            value = "/var/lib/postgresql/data/pgdata"
+          }
+          port {
+            container_port = 5432
+            name           = "tcp-postgres"
+          }
+          resources {
+            requests = { cpu = "100m", memory = "256Mi" }
+            limits   = { memory = "512Mi" }
+          }
+          volume_mount {
+            name       = "data"
+            mount_path = "/var/lib/postgresql/data"
+          }
+          readiness_probe {
+            exec { command = ["pg_isready", "-U", "keycloak"] }
+            initial_delay_seconds = 5
+            period_seconds        = 10
+          }
+        }
+        volume {
+          name = "data"
+          persistent_volume_claim {
+            claim_name = "keycloak-db"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service_v1" "keycloak_db" {
+  count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
+
+  metadata {
+    name      = "keycloak-db"
+    namespace = kubernetes_namespace.keycloak[0].metadata[0].name
+  }
+  spec {
+    selector = { app = "keycloak-db" }
+    port {
+      port        = 5432
+      target_port = 5432
+      name        = "tcp-postgres"
+    }
+  }
+}
+
 resource "helm_release" "keycloak" {
   count = var.enable_keycloak ? 1 : 0
 
@@ -359,32 +484,24 @@ resource "helm_release" "keycloak" {
       http = {
         relativePath = "/"
       }
-      # Bootstrap admin via env vars (KC_BOOTSTRAP_ADMIN_*). H2 in-memory db
-      # by default — fine for an ephemeral sandbox; for real deployments
-      # plug an external Postgres via `database.*`.
+      # Bootstrap admin via env vars (KC_BOOTSTRAP_ADMIN_*). H2 in-memory by
+      # default; when keycloak_persist_realm=true a small Postgres lives in
+      # the same namespace and the realm survives restarts.
       #
       # The admin password is pulled from a Kubernetes Secret you create
       # out of band so the value never enters Terraform state or any local
       # file in this repo. See README "Real Google Identity — Keycloak IdP".
       command  = ["/opt/keycloak/bin/kc.sh", "start", "--http-enabled=true", "--proxy-headers=xforwarded", "--hostname-strict=false", "--http-relative-path=/"]
-      extraEnv = <<-EOT
-        - name: KC_BOOTSTRAP_ADMIN_USERNAME
-          value: admin
-        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ${var.keycloak_admin_secret_name}
-              key: password
-        - name: KC_HOSTNAME
-          value: https://${var.keycloak_hostname}
-        - name: KC_HTTP_ENABLED
-          value: "true"
-        - name: KC_PROXY_HEADERS
-          value: xforwarded
-      EOT
-      database = {
-        vendor = "dev-mem"
-      }
+      extraEnv = local.keycloak_extra_env
+      database = var.keycloak_persist_realm ? {
+        vendor            = "postgres"
+        hostname          = "keycloak-db.${var.keycloak_namespace}.svc.cluster.local"
+        port              = 5432
+        database          = "keycloak"
+        username          = "keycloak"
+        existingSecret    = var.keycloak_db_secret_name
+        existingSecretKey = "password"
+      } : { vendor = "dev-mem" }
       service = {
         type     = "ClusterIP"
         httpPort = 80
@@ -401,6 +518,11 @@ resource "helm_release" "keycloak" {
 
   wait    = true
   timeout = var.helm_timeout_seconds
+
+  depends_on = [
+    kubernetes_deployment_v1.keycloak_db,
+    kubernetes_service_v1.keycloak_db,
+  ]
 }
 
 resource "kubernetes_manifest" "keycloak_ingress" {

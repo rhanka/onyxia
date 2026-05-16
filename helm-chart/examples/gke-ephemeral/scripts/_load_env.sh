@@ -58,6 +58,10 @@ export TF_VAR_extra_values_files='["../../onyxia-gke-public-values.yaml","../../
 export TF_VAR_enable_cert_manager="${ENABLE_CERT_MANAGER:-true}"
 export TF_VAR_enable_services_ingress_nginx="${ENABLE_SERVICES_INGRESS_NGINX:-true}"
 export TF_VAR_enable_keycloak="${ENABLE_KEYCLOAK:-true}"
+# Persist the Keycloak realm across pod restarts via a small Postgres
+# in the keycloak namespace. Required for resume-after-restart to be
+# truly painless.
+export TF_VAR_keycloak_persist_realm="${KEYCLOAK_PERSIST_REALM:-true}"
 # Disabled by default with Keycloak: the gateway + global-auth are not needed
 # because Onyxia core does its own OIDC against Keycloak.
 export TF_VAR_enable_oauth2_proxy_gateway="${ENABLE_OAUTH2_PROXY_GATEWAY:-false}"

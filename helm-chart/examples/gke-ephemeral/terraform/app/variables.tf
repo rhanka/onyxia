@@ -270,6 +270,18 @@ variable "keycloak_admin_secret_name" {
   default     = "keycloak-bootstrap-admin"
 }
 
+variable "keycloak_db_secret_name" {
+  type        = string
+  description = "Name of a pre-created Kubernetes Secret in the Keycloak namespace holding the Postgres password under key 'password'. Create it out of band."
+  default     = "keycloak-db"
+}
+
+variable "keycloak_persist_realm" {
+  type        = bool
+  description = "Persist Keycloak data in a dedicated Postgres (instead of the chart's H2 in-memory). When true, a small Postgres Deployment is created in the Keycloak namespace and Keycloak is wired to it; realm configuration survives pod restarts."
+  default     = false
+}
+
 variable "local_port" {
   type        = number
   description = "Local port used by the local same-origin proxy output."
