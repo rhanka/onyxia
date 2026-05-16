@@ -89,17 +89,35 @@ jobs:
         run: |
           gcloud container clusters get-credentials "${CLUSTER_NAME}" --project "${PROJECT_ID}" --location "${REGION}"
 
-      - name: Create out-of-band secrets in cluster (idempotent)
+      # ---------------- resume + init: apply app + post-config ----------------
+      # Three-phase apply because two constraints fight each other on cold
+      # clusters:
+      #   1) kubernetes_manifest.cert_manager_cluster_issuer plans against a
+      #      live cluster: the CRD must exist before it can be planned. So
+      #      apply the cert-manager helm release first.
+      #   2) the helm releases for Onyxia & Keycloak expect Kubernetes Secrets
+      #      to exist in the onyxia / keycloak namespaces. We create those
+      #      Secrets out of band (so passwords never enter Terraform state) —
+      #      which means the namespaces must exist BEFORE we create the
+      #      Secrets but AFTER cert-manager. Phase 1.5 takes care of that.
+      - name: Apply app layer — phase 1 (cert-manager CRDs)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: ./scripts/_tofu.sh app apply -input=false -auto-approve -target=helm_release.cert_manager
+
+      - name: Apply app layer — phase 1.5 (namespaces)
+        if: inputs.mode == 'init' || inputs.mode == 'resume'
+        run: |
+          ./scripts/_tofu.sh app apply -input=false -auto-approve \
+            -target=kubernetes_namespace.onyxia \
+            -target='kubernetes_namespace.keycloak[0]'
+
+      - name: Create out-of-band Kubernetes Secrets (idempotent)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
         env:
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_COOKIE_SECRET: ${{ secrets.GOOGLE_OAUTH_COOKIE_SECRET }}
           KEYCLOAK_ADMIN_PASSWORD:    ${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
         run: |
-          # Namespaces (idempotent)
-          for ns in onyxia keycloak; do
-            kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-          done
           # oauth2-proxy gateway secret (only consumed if you enable the gateway)
           kubectl -n onyxia create secret generic onyxia-oauth2-proxy \
             --from-literal=client-secret="${GOOGLE_OAUTH_CLIENT_SECRET}" \
@@ -109,15 +127,6 @@ jobs:
           kubectl -n keycloak create secret generic keycloak-bootstrap-admin \
             --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD}" \
             --dry-run=client -o yaml | kubectl apply -f -
-
-      # ---------------- resume + init: apply app + post-config ----------------
-      # Two-phase apply: cert-manager Helm release first (installs the
-      # ClusterIssuer CRD), then the rest. Without this, plan-time validation
-      # of kubernetes_manifest.cert_manager_cluster_issuer fails on a cold
-      # cluster where the CRD doesn't exist yet.
-      - name: Apply app layer — phase 1 (cert-manager CRDs)
-        if: inputs.mode == 'init' || inputs.mode == 'resume'
-        run: ./scripts/_tofu.sh app apply -input=false -auto-approve -target=helm_release.cert_manager
 
       - name: Apply app layer — phase 2 (full)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
