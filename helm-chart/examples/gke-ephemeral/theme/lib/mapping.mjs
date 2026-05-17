@@ -13,7 +13,11 @@ const FONT_FILES = {
 
 const SENT_REPO_VERSION_DEFAULT = 'v0.5.0';
 const JSDELIVR_GH_PREFIX = 'https://cdn.jsdelivr.net/gh/rhanka/sent-tech-design-system@';
-const JSDELIVR_GH_SUFFIX = '/packages/themes/fonts/';
+// No trailing slash: Onyxia builds the final URL as `${dirUrl}/${file}` (see
+// web/src/env.ts and ui/theme/injectCustomFontFaceIfNotAlreadyDone.ts). A
+// trailing `/` here would yield `.../fonts//Inter-Regular.woff2` and crash
+// ensureUrlIsSafe.
+const JSDELIVR_GH_SUFFIX = '/packages/themes/fonts';
 
 export function toOnyxiaPalettes(theme) {
   const s = theme?.tokens?.semantic;

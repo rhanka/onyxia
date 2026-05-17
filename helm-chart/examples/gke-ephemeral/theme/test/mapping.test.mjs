@@ -85,13 +85,16 @@ test('toOnyxiaPalettes — dark palette has dark.main from surface.inverse', () 
   assert.equal(dark.dark.main, '#0b1220');
 });
 
-test('toOnyxiaFont — fontFamily + jsdelivr dirUrl', () => {
+test('toOnyxiaFont — fontFamily + jsdelivr dirUrl (no trailing slash)', () => {
   const font = toOnyxiaFont(fontFoundation, { version: 'v0.5.0' });
   assert.equal(font.fontFamily, '"Inter", system-ui, sans-serif');
-  assert.match(
+  // dirUrl MUST NOT end with `/` — Onyxia appends `/${file}` itself; a
+  // trailing slash would crash ensureUrlIsSafe with a `//file` double-slash.
+  assert.equal(
     font.dirUrl,
-    /^https:\/\/cdn\.jsdelivr\.net\/gh\/rhanka\/sent-tech-design-system@v0\.5\.0\/packages\/themes\/fonts\/$/
+    'https://cdn.jsdelivr.net/gh/rhanka/sent-tech-design-system@v0.5.0/packages/themes/fonts'
   );
+  assert.ok(!font.dirUrl.endsWith('/'), `dirUrl unexpectedly ends with '/': ${font.dirUrl}`);
   assert.equal(font['400'], 'Inter-Regular.woff2');
   assert.equal(font['500'], 'Inter-Medium.woff2');
   assert.equal(font['600'], 'Inter-SemiBold.woff2');

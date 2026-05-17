@@ -528,6 +528,21 @@ Run `./scripts/up.sh` (or the GHA workflow with `mode=resume`). The deploy will:
 3. Splice the block under `web.env:` in `onyxia-private-values.local.yaml`.
 4. `tofu apply` upgrades the helm release — Onyxia restarts with the new env, which `onyxia-web` consumes at boot.
 
+### Fonts (off by default in v1)
+
+`onyxia-web`'s env loader pipes `FONT.dirUrl` through `ensureUrlIsSafe`, which rejects any URL that is not a local path (i.e. does not start with `/`) when the SPA is not in a Keycloak context. The sent-tech fonts currently live on jsdelivr (`https://cdn.jsdelivr.net/gh/rhanka/sent-tech-design-system@…`), so emitting them crashes the app at boot. The generator therefore **skips the `FONT` block by default** and Onyxia keeps its built-in font.
+
+Override once you host the woff2 files under the `onyxia-web` origin:
+
+```
+SENTROPIC_INJECT_FONT=true
+```
+
+v2 plan to ship the fonts locally (out of scope for this fix):
+
+- Add an `initContainer` to the `onyxia-web` Deployment that downloads `Inter-{Regular,Medium,SemiBold,Bold}.woff2` from jsdelivr into an `emptyDir` mounted at `/usr/share/nginx/html/fonts/`. Then set `FONT.dirUrl=/fonts` in `web.env` and flip the toggle.
+- Alternative: rewrite `/fonts/*` to the jsdelivr origin in the ingress and keep `dirUrl=/fonts`.
+
 ### Pin a specific sentropic version
 
 Edit `theme/package.json`:
