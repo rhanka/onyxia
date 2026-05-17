@@ -55,6 +55,16 @@ test('toOnyxiaPalettes — light has focus.main from action.primary', () => {
   assert.equal(light.focus.main, '#0057ff');
 });
 
+test('toOnyxiaPalettes — oklch() inputs are converted to hex (MUI compatibility)', () => {
+  const oklchStub = JSON.parse(JSON.stringify(stub));
+  oklchStub.tokens.semantic.action.primary = 'oklch(50% 0.134 242.749)';
+  oklchStub.tokens.semantic.border.interactive = 'oklch(50% 0.134 242.749)';
+  const { light, dark } = toOnyxiaPalettes(oklchStub);
+  const flat = JSON.stringify({ light, dark });
+  assert.equal(flat.includes('oklch('), false, `oklch() leaked into palette output: ${flat}`);
+  assert.match(light.focus.main, /^#[0-9a-f]{6}$/);
+});
+
 test('toOnyxiaPalettes — light.main from surface.default', () => {
   const { light } = toOnyxiaPalettes(stub);
   assert.equal(light.light.main, '#ffffff');
