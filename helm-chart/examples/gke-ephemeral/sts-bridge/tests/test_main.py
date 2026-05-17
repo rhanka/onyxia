@@ -68,3 +68,22 @@ def test_assume_role_unsupported_action(client):
         data={"Action": "GetCallerIdentity", "WebIdentityToken": "x"},
     )
     assert r.status_code == 400
+
+
+def test_assume_role_quota_exceeded_maps_to_503(client):
+    """M2: HMAC quota exhaustion must surface as HTTP 503, not 500."""
+    c, m = client
+    from app.gcp_provision import HmacQuotaExceeded
+
+    with patch.object(m, "verify_token", return_value={"sub": "abc"}), \
+         patch.object(
+             m,
+             "provision_user_credentials",
+             side_effect=HmacQuotaExceeded("10 keys cap reached"),
+         ):
+        r = c.post(
+            "/",
+            data={"Action": "AssumeRoleWithWebIdentity", "WebIdentityToken": "x"},
+        )
+    assert r.status_code == 503
+    assert "quota" in r.text.lower() or "hmac" in r.text.lower()

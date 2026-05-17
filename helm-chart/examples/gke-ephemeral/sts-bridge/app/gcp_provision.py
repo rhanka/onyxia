@@ -22,6 +22,15 @@ from typing import Optional, Tuple
 log = logging.getLogger("sts-bridge.gcp_provision")
 
 
+class HmacQuotaExceeded(RuntimeError):
+    """Raised when GCS rejects HMAC creation because the per-SA 10-key cap is full.
+
+    Caller (FastAPI handler) is expected to translate this into HTTP 503 so the
+    Onyxia API can surface a clear "service degraded, retry in <rotation
+    interval>" message rather than a generic 500.
+    """
+
+
 def sub_short(sub: str) -> str:
     """Stable, short, GCP-SA-name-safe identifier derived from a JWT sub."""
     return hashlib.sha256(sub.encode()).hexdigest()[:12]
@@ -105,13 +114,34 @@ def _gcp_get_or_create_sa(iam, project: str, short: str) -> str:
     return email
 
 
+def _binding_title(b) -> Optional[str]:
+    """Extract IAM Condition title from either a dict-shaped or attr-shaped binding."""
+    cond = b.get("condition") if isinstance(b, dict) else getattr(b, "condition", None)
+    if cond is None:
+        return None
+    if isinstance(cond, dict):
+        return cond.get("title")
+    return getattr(cond, "title", None)
+
+
 def _gcp_bind_prefix_iam(gcs, bucket: str, sa_email: str, short: str) -> None:
-    """Grant objectAdmin scoped to `user-<short>/*` via IAM Condition."""
+    """Grant objectAdmin scoped to `user-<short>/*` via IAM Condition.
+
+    Idempotent: if a binding with `condition.title == f"prefix-{short}"`
+    already exists the call is a no-op (no `set_iam_policy` round-trip). This
+    avoids monotonically growing the bucket IAM policy across reconnects, a
+    bug the code reviewer flagged (M3).
+    """
+    title = f"prefix-{short}"
     b = gcs.bucket(bucket)
     policy = b.get_iam_policy(requested_policy_version=3)
     policy.version = 3
+    for existing in policy.bindings:
+        if _binding_title(existing) == title:
+            log.debug("IAM binding %s already present, skipping", title)
+            return
     cond = {
-        "title": f"prefix-{short}",
+        "title": title,
         "description": f"Only user-{short}/* in {bucket}",
         "expression": (
             f'resource.name.startsWith("projects/_/buckets/{bucket}'
@@ -129,11 +159,34 @@ def _gcp_bind_prefix_iam(gcs, bucket: str, sa_email: str, short: str) -> None:
 
 
 def _gcp_mint_hmac(gcs, project: str, sa_email: str) -> Tuple[str, str]:
-    """Mint a fresh HMAC pair for the given SA. Quota: 10 active keys / SA."""
-    key_meta, secret = gcs.create_hmac_key(
-        service_account_email=sa_email,
-        project_id=project,
-    )
+    """Mint a fresh HMAC pair for the given SA.
+
+    GCS caps HMAC keys at 10 active per SA. When the cap is hit, the client
+    raises `google.api_core.exceptions.ResourceExhausted` (or a generic
+    exception whose str() contains "quota"). We translate either into
+    `HmacQuotaExceeded` (M2 fix) so the HTTP layer can answer 503 instead of
+    silently bubbling a 500 to the user.
+    """
+    try:
+        key_meta, secret = gcs.create_hmac_key(
+            service_account_email=sa_email,
+            project_id=project,
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        is_quota = (
+            "quota" in msg
+            or "resourceexhausted" in type(exc).__name__.lower()
+            or "resource exhausted" in msg
+        )
+        if is_quota:
+            log.warning(
+                "HMAC quota exceeded for sa=%s: %s — daily rotation CronJob will recycle keys",
+                sa_email,
+                exc,
+            )
+            raise HmacQuotaExceeded(str(exc)) from exc
+        raise
     return key_meta.access_id, secret
 
 
