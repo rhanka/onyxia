@@ -3,6 +3,12 @@
 // sentropic semantic key disappears upstream, the access below will yield
 // undefined and the generator MUST fail loud (see assertPalette in
 // sentropic-to-onyxia.mjs).
+//
+// Color-space note: every value the sentropic theme exposes is normalized to
+// #rrggbb before being handed to Onyxia, because MUI's colorManipulator
+// (transitive dep used by Onyxia) does not understand oklch().
+
+import { normalizeColorsDeep } from './oklch.mjs';
 
 const FONT_FILES = {
   '400': 'Inter-Regular.woff2',
@@ -83,7 +89,7 @@ export function toOnyxiaPalettes(theme) {
     blueInfo:      light.blueInfo
   };
 
-  return { light, dark };
+  return { light: normalizeColorsDeep(light), dark: normalizeColorsDeep(dark) };
 }
 
 // `fontFoundation` is the `foundation.font` export from
