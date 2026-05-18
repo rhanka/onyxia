@@ -333,8 +333,8 @@ variable "sts_bridge_image" {
 #   - keycloak-init.sh registers a confidential client + audience mapper
 #     so Onyxia user tokens carry `aud: polaris`.
 #
-# Keep enable_polaris=false until the GCS warehouse bucket (delivered by the
-# brainstorm/gcs-buckets branch) is wired into enable_polaris_storage.
+# Keep enable_polaris=false until you actually want the extra catalog surface;
+# the companion GCS warehouse bucket is provisioned by this workpackage.
 # ---------------------------------------------------------------------------
 
 variable "enable_polaris" {
@@ -378,28 +378,27 @@ variable "polaris_db_secret_name" {
   default     = "polaris-db"
 }
 
-# --- Storage (GCS) — STUB until brainstorm/gcs-buckets lands ----------------
+# --- Storage (GCS) -----------------------------------------------------------
 # The Polaris catalog object that points at the GCS warehouse is created by
 # scripts/polaris-init.sh, NOT by Terraform. To exercise the Polaris stack in
-# isolation (no bucket yet) keep enable_polaris_storage=false. The audit step
-# (Section 4 of the implementation plan) flips this to true once the bucket
-# and Workload Identity binding from brainstorm/gcs-buckets are merged.
+# isolation keep enable_polaris_storage=false until you want Polaris to vend
+# STS access against the warehouse bucket and GSA provisioned by this branch.
 
 variable "enable_polaris_storage" {
   type        = bool
-  description = "Wire Polaris to a GCS warehouse bucket. STUB: set to true only after brainstorm/gcs-buckets has been merged and the bucket + GSA exist."
+  description = "Wire Polaris to a GCS warehouse bucket. Leave false until Polaris should vend STS access against the warehouse bucket and GSA."
   default     = false
 }
 
 variable "polaris_warehouse_bucket" {
   type        = string
-  description = "Name of the GCS bucket used as the Polaris warehouse root (no gs:// prefix). Populated by brainstorm/gcs-buckets."
+  description = "Name of the GCS bucket used as the Polaris warehouse root (no gs:// prefix). Defaults to the bucket provisioned by this workpackage."
   default     = ""
 }
 
 variable "polaris_warehouse_gsa_email" {
   type        = string
-  description = "Email of the GCP service account Polaris impersonates to mint vended STS tokens against the warehouse bucket. Populated by brainstorm/gcs-buckets."
+  description = "Email of the GCP service account Polaris impersonates to mint vended STS tokens against the warehouse bucket. Defaults to the GSA provisioned by this workpackage."
   default     = ""
 }
 

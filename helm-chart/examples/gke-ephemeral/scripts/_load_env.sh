@@ -81,8 +81,9 @@ export TF_VAR_services_ingress_nginx_oauth2_auth="${ENABLE_OAUTH2_GLOBAL_AUTH:-f
 
 # Apache Polaris (Iceberg catalog). Off by default — see README "Lakehouse
 # Iceberg via Polaris". When ENABLE_POLARIS=true, a Postgres + Polaris pod +
-# Ingress land in the polaris namespace. The companion GCS storage config
-# (ENABLE_POLARIS_STORAGE) waits for the brainstorm/gcs-buckets branch.
+# Ingress land in the polaris namespace. Keep ENABLE_POLARIS_STORAGE=false
+# until you actually want Polaris to vend STS access against the warehouse
+# bucket created by this same workpackage.
 export TF_VAR_enable_polaris="${ENABLE_POLARIS:-false}"
 export TF_VAR_polaris_hostname="${POLARIS_HOSTNAME:-}"
 export TF_VAR_enable_polaris_storage="${ENABLE_POLARIS_STORAGE:-false}"
