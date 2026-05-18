@@ -173,7 +173,15 @@ jobs:
 
       - name: Apply app layer — phase 2 (full)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
-        run: ./scripts/_tofu.sh app apply -input=false -auto-approve
+        run: |
+          if [ "${{ inputs.mode }}" = "resume" ]; then
+            # Resume is used for iterative app-only changes on an existing
+            # environment. Skip refresh so pre-existing high-privilege GCS IAM
+            # bindings do not force extra deployer permissions on every rerun.
+            ./scripts/_tofu.sh app apply -refresh=false -input=false -auto-approve
+          else
+            ./scripts/_tofu.sh app apply -input=false -auto-approve
+          fi
 
       - name: Run keycloak-init (idempotent — covers H2 restart)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
