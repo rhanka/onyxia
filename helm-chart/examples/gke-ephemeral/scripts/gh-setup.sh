@@ -20,7 +20,22 @@ set -a; source "${ENV_FILE}"; set +a
 REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 echo "[gh-setup] target repo: ${REPO}"
 
-declare -A VARS=(
+set_var() {
+  local key="$1" value="$2"
+  echo "[gh-setup] var ${key} ← ${value}"
+  gh variable set "${key}" --body "${value}" --repo "${REPO}"
+}
+
+set_optional_var() {
+  local key="$1" value="${2:-}"
+  if [ -z "${value}" ]; then
+    echo "[gh-setup] var ${key} skipped (empty)"
+    return 0
+  fi
+  set_var "${key}" "${value}"
+}
+
+declare -A REQUIRED_VARS=(
   [GCP_PROJECT_ID]="${PROJECT_ID}"
   [GCP_REGION]="${REGION}"
   [GCP_CLUSTER_NAME]="${CLUSTER_NAME}"
@@ -30,10 +45,19 @@ declare -A VARS=(
   [GOOGLE_OAUTH_CLIENT_ID]="${GOOGLE_OAUTH_CLIENT_ID}"
   [GOOGLE_OAUTH_ALLOWED_EMAILS]="${GOOGLE_OAUTH_ALLOWED_EMAILS}"
 )
-for key in "${!VARS[@]}"; do
-  echo "[gh-setup] var ${key} ← ${VARS[$key]}"
-  gh variable set "$key" --body "${VARS[$key]}" --repo "${REPO}"
+for key in "${!REQUIRED_VARS[@]}"; do
+  set_var "${key}" "${REQUIRED_VARS[$key]}"
 done
+
+set_var ENABLE_SENTROPIC_THEME "${ENABLE_SENTROPIC_THEME:-false}"
+set_optional_var SENTROPIC_HEADER_LOGO_URL "${SENTROPIC_HEADER_LOGO_URL:-}"
+set_optional_var SENTROPIC_HEADER_TEXT_BOLD "${SENTROPIC_HEADER_TEXT_BOLD:-}"
+set_optional_var SENTROPIC_HEADER_TEXT_FOCUS "${SENTROPIC_HEADER_TEXT_FOCUS:-}"
+set_optional_var SENTROPIC_THEME_VERSION "${SENTROPIC_THEME_VERSION:-}"
+
+set_var ENABLE_POLARIS "${ENABLE_POLARIS:-false}"
+set_optional_var POLARIS_HOSTNAME "${POLARIS_HOSTNAME:-}"
+set_var ENABLE_POLARIS_STORAGE "${ENABLE_POLARIS_STORAGE:-false}"
 
 prompt_secret() {
   local name="$1" val="${!2:-}"

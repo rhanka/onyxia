@@ -1,11 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import path from 'node:path';
-import url from 'node:url';
-
-const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-const ENTRY = path.join(__dirname, '..', 'sentropic-to-onyxia.mjs');
+import { generateWebEnv } from '../sentropic-to-onyxia.mjs';
 
 const BASE_ENV = {
   SENTROPIC_HEADER_LOGO_URL: 'https://cdn.example.com/logo.svg',
@@ -15,11 +10,8 @@ const BASE_ENV = {
   SENTROPIC_FAVICON_URL: 'https://cdn.example.com/favicon.svg'
 };
 
-test('generator — emits the 7 always-on web.env keys (FONT skipped by default)', () => {
-  const out = execFileSync('node', [ENTRY], {
-    env: { ...process.env, ...BASE_ENV },
-    encoding: 'utf8'
-  });
+test('generator — emits the 7 always-on web.env keys (FONT skipped by default)', async () => {
+  const out = await generateWebEnv({ env: { ...process.env, ...BASE_ENV } });
 
   for (const key of [
     'PALETTE_OVERRIDE_LIGHT:',
@@ -41,10 +33,9 @@ test('generator — emits the 7 always-on web.env keys (FONT skipped by default)
   );
 });
 
-test('generator — emits FONT when SENTROPIC_INJECT_FONT=true', () => {
-  const out = execFileSync('node', [ENTRY], {
-    env: { ...process.env, ...BASE_ENV, SENTROPIC_INJECT_FONT: 'true' },
-    encoding: 'utf8'
+test('generator — emits FONT when SENTROPIC_INJECT_FONT=true', async () => {
+  const out = await generateWebEnv({
+    env: { ...process.env, ...BASE_ENV, SENTROPIC_INJECT_FONT: 'true' }
   });
   assert.ok(/^FONT:/m.test(out), `FONT block missing when toggle is on:\n${out}`);
   // And the dirUrl invariant from the mapping fix: no `//` in the basename path.
@@ -54,12 +45,9 @@ test('generator — emits FONT when SENTROPIC_INJECT_FONT=true', () => {
   );
 });
 
-test('generator — fails loudly if required header env vars are missing', () => {
-  assert.throws(() => {
-    execFileSync('node', [ENTRY], {
-      env: { ...process.env, SENTROPIC_HEADER_LOGO_URL: '' },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-  }, /SENTROPIC_HEADER_LOGO_URL/);
+test('generator — fails loudly if required header env vars are missing', async () => {
+  await assert.rejects(
+    () => generateWebEnv({ env: { ...process.env, SENTROPIC_HEADER_LOGO_URL: '' } }),
+    /SENTROPIC_HEADER_LOGO_URL/
+  );
 });
