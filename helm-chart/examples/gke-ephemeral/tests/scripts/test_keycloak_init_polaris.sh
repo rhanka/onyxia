@@ -31,7 +31,15 @@ for arg in "$@"; do
       config)        exit 0 ;;
       create)        exit 0 ;;  # treat every create as success — covers first-run path
       get)
-        # Asked for the onyxia client UUID; return one deterministic value.
+        # Asked for the client UUIDs or for the polaris client secret.
+        if printf '%s\n' "$*" | grep -F 'clientId=polaris' >/dev/null; then
+          echo "polaris-client-uuid-xyz"
+          exit 0
+        fi
+        if printf '%s\n' "$*" | grep -F 'clients/polaris-client-uuid-xyz/client-secret' >/dev/null; then
+          echo '{"type":"secret","value":"secret-from-mock"}'
+          exit 0
+        fi
         echo "client-uuid-xyz"
         exit 0
         ;;
@@ -85,6 +93,9 @@ grep -F 'protocol-mappers/models -r onyxia' "$KCMOCK_CALLS" \
 # Audience mapper must target the resolved client UUID, not the literal "onyxia".
 grep -F 'clients/client-uuid-xyz/protocol-mappers/models' "$KCMOCK_CALLS" >/dev/null \
   || { echo "FAIL: audience mapper not addressed by resolved UUID" >&2; cat "$KCMOCK_CALLS" >&2; exit 1; }
+
+grep -F 'create secret generic polaris-client' "$KCMOCK_CALLS" | grep -F 'client-secret=secret-from-mock' >/dev/null \
+  || { echo "FAIL: polaris client secret was not mirrored into a Kubernetes Secret" >&2; cat "$KCMOCK_CALLS" >&2; exit 1; }
 
 # Second run with the same setup must still exit 0 (idempotency contract).
 : > "$KCMOCK_CALLS"

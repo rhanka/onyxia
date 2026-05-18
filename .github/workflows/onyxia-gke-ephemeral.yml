@@ -46,6 +46,9 @@ jobs:
       SENTROPIC_HEADER_TEXT_BOLD:  ${{ vars.SENTROPIC_HEADER_TEXT_BOLD }}
       SENTROPIC_HEADER_TEXT_FOCUS: ${{ vars.SENTROPIC_HEADER_TEXT_FOCUS }}
       SENTROPIC_THEME_VERSION:     ${{ vars.SENTROPIC_THEME_VERSION }}
+      ENABLE_POLARIS:              ${{ vars.ENABLE_POLARIS }}
+      POLARIS_HOSTNAME:            ${{ vars.POLARIS_HOSTNAME }}
+      ENABLE_POLARIS_STORAGE:      ${{ vars.ENABLE_POLARIS_STORAGE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,6 +87,9 @@ jobs:
           SENTROPIC_HEADER_TEXT_BOLD=${SENTROPIC_HEADER_TEXT_BOLD}
           SENTROPIC_HEADER_TEXT_FOCUS=${SENTROPIC_HEADER_TEXT_FOCUS}
           SENTROPIC_THEME_VERSION=${SENTROPIC_THEME_VERSION}
+          ENABLE_POLARIS=${ENABLE_POLARIS:-false}
+          POLARIS_HOSTNAME=${POLARIS_HOSTNAME}
+          ENABLE_POLARIS_STORAGE=${ENABLE_POLARIS_STORAGE:-false}
           EOF
 
       # ---------------- init mode ----------------
@@ -136,9 +142,14 @@ jobs:
       - name: Apply app layer — phase 1.5 (namespaces)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
         run: |
-          ./scripts/_tofu.sh app apply -input=false -auto-approve \
-            -target=kubernetes_namespace.onyxia \
+          targets=(
+            -target=kubernetes_namespace.onyxia
             -target='kubernetes_namespace.keycloak[0]'
+          )
+          if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
+            targets+=(-target='kubernetes_namespace.polaris[0]')
+          fi
+          ./scripts/_tofu.sh app apply -input=false -auto-approve "${targets[@]}"
 
       - name: Create out-of-band Kubernetes Secrets (idempotent)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
@@ -156,6 +167,9 @@ jobs:
           kubectl -n keycloak create secret generic keycloak-bootstrap-admin \
             --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD}" \
             --dry-run=client -o yaml | kubectl apply -f -
+          if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
+            ./scripts/ensure-polaris-db-secret.sh
+          fi
 
       - name: Apply app layer — phase 2 (full)
         if: inputs.mode == 'init' || inputs.mode == 'resume'
@@ -172,13 +186,28 @@ jobs:
           GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET}" \
           ONYXIA_HOSTNAME="${PUBLIC_HOSTNAME}" \
           KEYCLOAK_HOSTNAME="${KEYCLOAK_HOSTNAME}" \
+          ENABLE_POLARIS="${ENABLE_POLARIS:-false}" \
             ./scripts/keycloak-init.sh
+
+      - name: Run polaris-init (idempotent)
+        if: (inputs.mode == 'init' || inputs.mode == 'resume') && vars.ENABLE_POLARIS == 'true'
+        run: |
+          source ./scripts/_load_env.sh
+          POLARIS_HOSTNAME="${POLARIS_HOSTNAME}" \
+          KEYCLOAK_HOSTNAME="${KEYCLOAK_HOSTNAME}" \
+          ENABLE_POLARIS_STORAGE="${ENABLE_POLARIS_STORAGE:-false}" \
+          POLARIS_WAREHOUSE_BUCKET="${POLARIS_WAREHOUSE_BUCKET:-${GCS_POLARIS_WAREHOUSE_BUCKET}}" \
+          POLARIS_WAREHOUSE_GSA_EMAIL="${POLARIS_WAREHOUSE_GSA_EMAIL:-polaris-warehouse@${PROJECT_ID}.iam.gserviceaccount.com}" \
+            ./scripts/polaris-init.sh
 
       - name: Smoke test
         if: inputs.mode == 'init' || inputs.mode == 'resume'
         run: |
           curl -sIL --max-time 30 --max-redirs 2 "https://${PUBLIC_HOSTNAME}/" | grep -iE "^(HTTP|location)" || true
           curl -sI --max-time 30 "https://${KEYCLOAK_HOSTNAME}/realms/onyxia/.well-known/openid-configuration" | head -3 || true
+          if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
+            curl -sI --max-time 30 "https://${POLARIS_HOSTNAME}/api/catalog/v1/config" | head -3 || true
+          fi
 
       # ---------------- down modes ----------------
       - name: (down) Destroy app layer

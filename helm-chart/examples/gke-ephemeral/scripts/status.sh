@@ -36,6 +36,11 @@ kubectl get certificate -A -o custom-columns='NS:.metadata.namespace,NAME:.metad
 log "user-default workloads"
 kubectl -n user-default get pods,svc,ingress 2>/dev/null | sed 's/^/  /' || true
 
+if kubectl get namespace polaris >/dev/null 2>&1; then
+  log "polaris workloads"
+  kubectl -n polaris get pods,svc,ingress,secrets 2>/dev/null | sed 's/^/  /' || true
+fi
+
 log "cost reminder"
 cat <<EOF
   - GKE Autopilot control plane: ~\$2.40/d (often covered by GCP free tier).

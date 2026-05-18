@@ -597,6 +597,48 @@ and `workingDirectory` prefix. The same Terraform module also creates the
 `<project>-onyxia-warehouse` bucket and `polaris-warehouse@...` service account
 used by the Polaris/Iceberg track.
 
+## Lakehouse Iceberg via Polaris
+
+The example also ships an optional Apache Polaris catalog in front of the GCS
+warehouse bucket. This is a separate toggle from the base GCS/STS path:
+
+```bash
+ENABLE_POLARIS=true
+POLARIS_HOSTNAME=polaris.onyxia.example.com
+ENABLE_POLARIS_STORAGE=true
+```
+
+What happens when Polaris is enabled:
+
+- Terraform creates the `polaris` namespace, a small Postgres pod, the Polaris
+  deployment/service/ingress, and the Workload Identity binding for the
+  `polaris-warehouse@...` GSA.
+- `scripts/keycloak-init.sh` creates the confidential Keycloak client
+  `polaris`, adds the audience mapper on `onyxia`, and mirrors the generated
+  client secret into Kubernetes Secret `polaris/polaris-client`.
+- `scripts/polaris-init.sh` creates the `onyxia` Polaris catalog and points it
+  at `gs://<project>-onyxia-warehouse/`.
+
+Local workflow:
+
+```bash
+export KC_ADMIN_PASSWORD=...
+export GOOGLE_CLIENT_SECRET=...
+PROJECT_ID=my-gcp-project ./scripts/up.sh
+```
+
+The first run also ensures the out-of-band Secret `polaris/polaris-db` exists.
+If `POLARIS_DB_PASSWORD` is unset, the helper generates a random password once
+and stores it in-cluster.
+
+Useful checks:
+
+```bash
+kubectl -n polaris get pods,svc,ingress,secrets
+curl -s https://polaris.onyxia.example.com/api/catalog/v1/config | head
+./scripts/polaris-init.sh
+```
+
 ## Pause And Resume
 
 Destroy the disposable layers:
