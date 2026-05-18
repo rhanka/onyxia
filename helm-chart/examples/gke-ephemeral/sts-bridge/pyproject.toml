@@ -5,7 +5,9 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.115.0",
   "uvicorn[standard]==0.30.6",
-  "python-jose[cryptography]==3.3.0",
+  # Pin python-jose >= 3.4.0 to ship the fix for CVE-2024-33663 (algorithm
+  # confusion via JWK type) and CVE-2024-33664 (decode-time DoS).
+  "python-jose[cryptography]>=3.4.0,<4",
   "google-cloud-iam==2.15.2",
   "google-cloud-storage==2.18.2",
   "google-api-python-client==2.149.0",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Form, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import load_config
 from app.gcp_provision import HmacQuotaExceeded, provision_user_credentials, sub_short
@@ -21,6 +22,14 @@ log = logging.getLogger("sts-bridge")
 
 app = FastAPI(title="onyxia-gcs-sts-bridge")
 cfg = load_config()
+
+if cfg.cors_allow_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(cfg.cors_allow_origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 
 @app.get("/healthz")
@@ -48,6 +57,7 @@ def assume_role(
             project=cfg.project_id,
             bucket=cfg.bucket,
             namespace=cfg.k8s_namespace,
+            bridge_sa_email=cfg.bridge_sa_email,
         )
     except HmacQuotaExceeded as e:
         # GCS caps active HMAC keys at 10 per service account. The daily

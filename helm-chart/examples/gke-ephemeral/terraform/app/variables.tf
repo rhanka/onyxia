@@ -283,6 +283,48 @@ variable "keycloak_persist_realm" {
 }
 
 # ---------------------------------------------------------------------------
+# Optional GCS storage for Onyxia user files and the future Polaris warehouse.
+# This deploys a shared data bucket, a public STS bridge on the existing
+# ingress-nginx LoadBalancer, and a separate warehouse bucket/GSA for Iceberg.
+# ---------------------------------------------------------------------------
+
+variable "enable_gcs_storage" {
+  type        = bool
+  description = "Deploy the GCS STS bridge and buckets used by Onyxia user files and Polaris."
+  default     = false
+}
+
+variable "gcs_data_bucket_name" {
+  type        = string
+  description = "GCS bucket backing Onyxia user files. Defaults to <project>-onyxia-data."
+  default     = ""
+}
+
+variable "gcs_polaris_warehouse_bucket_name" {
+  type        = string
+  description = "GCS bucket backing the Polaris Iceberg warehouse. Defaults to <project>-onyxia-warehouse."
+  default     = ""
+}
+
+variable "gcs_bucket_location" {
+  type        = string
+  description = "GCS bucket location for the data and warehouse buckets."
+  default     = "US-CENTRAL1"
+}
+
+variable "sts_bridge_hostname" {
+  type        = string
+  description = "Public hostname for the STS bridge. Defaults to sts.<public_hostname> when GCS storage is enabled."
+  default     = ""
+}
+
+variable "sts_bridge_image" {
+  type        = string
+  description = "Container image used by the GCS STS bridge."
+  default     = "ghcr.io/rhanka/onyxia-gcs-sts-bridge:latest"
+}
+
+# ---------------------------------------------------------------------------
 # Optional Apache Polaris Iceberg catalog. When enable_polaris=true:
 #   - a dedicated Postgres (single Deployment) is provisioned in the
 #     polaris namespace as the Polaris metastore,

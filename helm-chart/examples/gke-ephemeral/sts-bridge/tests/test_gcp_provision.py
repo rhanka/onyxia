@@ -138,3 +138,42 @@ def test_mint_hmac_other_errors_pass_through():
     gcs.create_hmac_key.side_effect = RuntimeError("permission denied: caller lacks role")
     with pytest.raises(RuntimeError, match="permission denied"):
         _gcp_mint_hmac(gcs, "p", "sa@p.iam.gserviceaccount.com")
+
+
+# -- Dead var fix: bridge_sa_email must be observable on the cache Secret ----
+
+
+def test_cache_secret_carries_bridge_sa_label():
+    """The K8s cache Secret must be labelled with the bridge SA that minted it,
+    so an operator can audit `kubectl get secret -l onyxia.dev/bridge-sa=...`
+    and trace each cached HMAC back to its issuing bridge identity."""
+    from app.gcp_provision import _k8s_secret_put
+
+    k8s = MagicMock()
+    k8s.replace_namespaced_secret.side_effect = Exception("not found")
+    _k8s_secret_put(
+        k8s,
+        namespace="onyxia",
+        name="onyxia-user-hmac-abc",
+        ak="AK",
+        sk="SK",
+        bridge_sa_email="bridge@p.iam.gserviceaccount.com",
+    )
+    # On the fallback create path, the V1Secret body should carry the label.
+    _, kwargs = k8s.create_namespaced_secret.call_args
+    body = kwargs.get("body") or k8s.create_namespaced_secret.call_args.args[1]
+    labels = body.metadata.labels or {}
+    assert labels.get("onyxia.dev/bridge-sa") == "bridge-p.iam.gserviceaccount.com"
+
+
+def test_cache_secret_put_without_bridge_sa_stays_label_free():
+    """Backwards-compatible: omitting bridge_sa_email keeps the old behaviour
+    (Secret created with no extra labels)."""
+    from app.gcp_provision import _k8s_secret_put
+
+    k8s = MagicMock()
+    k8s.replace_namespaced_secret.side_effect = Exception("not found")
+    _k8s_secret_put(k8s, namespace="onyxia", name="onyxia-user-hmac-abc", ak="AK", sk="SK")
+    _, kwargs = k8s.create_namespaced_secret.call_args
+    body = kwargs.get("body") or k8s.create_namespaced_secret.call_args.args[1]
+    assert (body.metadata.labels or {}) == {}

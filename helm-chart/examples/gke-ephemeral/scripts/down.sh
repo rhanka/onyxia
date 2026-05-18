@@ -25,14 +25,14 @@ for arg in "$@"; do
 done
 
 log "tofu destroy app layer"
-( cd "${TF_APP_DIR}" && tofu destroy -input=false -auto-approve )
+"${SCRIPT_DIR}/_tofu.sh" app destroy -input=false -auto-approve
 
 if [ "${FULL}" -eq 1 ]; then
   for layer in cluster base; do
     dir="${EXAMPLE_DIR}/terraform/${layer}"
     if [ -d "${dir}" ]; then
       log "tofu destroy ${layer} layer"
-      ( cd "${dir}" && tofu destroy -input=false -auto-approve )
+      "${SCRIPT_DIR}/_tofu.sh" "${layer}" destroy -input=false -auto-approve
     fi
   done
 fi

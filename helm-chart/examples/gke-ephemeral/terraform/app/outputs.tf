@@ -38,3 +38,23 @@ output "services_ingress_nginx_ip" {
   value       = var.enable_services_ingress_nginx ? try(data.kubernetes_service.services_ingress_nginx_controller[0].status[0].load_balancer[0].ingress[0].ip, null) : null
   description = "External IP of the optional ingress-nginx controller used by Onyxia user services. Point *.services.<domain> at this IP."
 }
+
+output "gcs_data_bucket_name" {
+  value       = var.enable_gcs_storage ? module.gcs_storage[0].data_bucket_name : null
+  description = "GCS bucket backing Onyxia user files when GCS storage is enabled."
+}
+
+output "gcs_sts_bridge_url" {
+  value       = var.enable_gcs_storage ? module.gcs_storage[0].sts_bridge_url : null
+  description = "Public STS bridge URL used by Onyxia's browser S3 client."
+}
+
+output "polaris_warehouse_bucket_name" {
+  value       = local.polaris_warehouse_bucket_effective != "" ? local.polaris_warehouse_bucket_effective : null
+  description = "GCS bucket backing the Polaris Iceberg warehouse."
+}
+
+output "polaris_warehouse_gsa_email" {
+  value       = local.polaris_warehouse_gsa_email_effective != "" ? local.polaris_warehouse_gsa_email_effective : null
+  description = "GCP service account Polaris can impersonate for the warehouse bucket."
+}

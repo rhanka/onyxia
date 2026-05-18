@@ -67,16 +67,44 @@ def _k8s_secret_get(k8s, namespace: str, name: str) -> Optional[Tuple[str, str]]
     return None
 
 
-def _k8s_secret_put(k8s, namespace: str, name: str, ak: str, sk: str) -> None:
-    """Upsert the cache Secret idempotently."""
+def _k8s_label_safe(value: str) -> str:
+    """Coerce an arbitrary string into a Kubernetes label-value-safe form.
+
+    Label values must match `[A-Za-z0-9._-]{1,63}` — emails contain `@` which
+    is forbidden. We replace `@` with `-` (the SA email is still recoverable
+    by reading the bridge env).
+    """
+    return value.replace("@", "-")[:63]
+
+
+def _k8s_secret_put(
+    k8s,
+    namespace: str,
+    name: str,
+    ak: str,
+    sk: str,
+    bridge_sa_email: Optional[str] = None,
+) -> None:
+    """Upsert the cache Secret idempotently.
+
+    When `bridge_sa_email` is provided, label the Secret with
+    `onyxia.dev/bridge-sa=<email>` so operators can `kubectl get secret -l`
+    to trace every cached HMAC back to the bridge identity that minted it
+    (audit trail; GCS HMAC ops do not show up in Cloud Audit Logs).
+    """
     from kubernetes import client as kc
 
     data = {
         "access_key": base64.b64encode(ak.encode()).decode(),
         "secret_key": base64.b64encode(sk.encode()).decode(),
     }
+    labels = (
+        {"onyxia.dev/bridge-sa": _k8s_label_safe(bridge_sa_email)}
+        if bridge_sa_email
+        else {}
+    )
     body = kc.V1Secret(
-        metadata=kc.V1ObjectMeta(name=name),
+        metadata=kc.V1ObjectMeta(name=name, labels=labels),
         data=data,
         type="Opaque",
     )
@@ -199,20 +227,39 @@ def provision_user_credentials(
     namespace: str,
     k8s=None,
     gcp=None,
+    bridge_sa_email: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return (access_key, secret_key) for a Keycloak user, provisioning as needed."""
+    """Return (access_key, secret_key) for a Keycloak user, provisioning as needed.
+
+    `bridge_sa_email` is the GSA the bridge pod itself runs as (via Workload
+    Identity). When supplied it is recorded as a label on the K8s cache
+    Secret for auditability; HMAC ops do not show up in Cloud Audit Logs so
+    this label is the only durable record of "who minted what".
+    """
     short = sub_short(sub)
     if k8s is None:
         k8s = _k8s_client()
     cached = _k8s_secret_get(k8s, namespace, _secret_name(short))
     if cached and cached[0] and cached[1]:
-        log.info("cache hit for sub_short=%s", short)
+        log.info("cache hit for sub_short=%s bridge_sa=%s", short, bridge_sa_email or "?")
         return cached
 
     iam, gcs = gcp if gcp else _gcp_clients()
     sa_email = _gcp_get_or_create_sa(iam, project, short)
     _gcp_bind_prefix_iam(gcs, bucket, sa_email, short)
     ak, sk = _gcp_mint_hmac(gcs, project, sa_email)
-    _k8s_secret_put(k8s, namespace, _secret_name(short), ak, sk)
-    log.info("provisioned new HMAC for sub_short=%s sa=%s", short, sa_email)
+    _k8s_secret_put(
+        k8s,
+        namespace,
+        _secret_name(short),
+        ak,
+        sk,
+        bridge_sa_email=bridge_sa_email,
+    )
+    log.info(
+        "provisioned new HMAC sub_short=%s user_sa=%s bridge_sa=%s",
+        short,
+        sa_email,
+        bridge_sa_email or "?",
+    )
     return ak, sk

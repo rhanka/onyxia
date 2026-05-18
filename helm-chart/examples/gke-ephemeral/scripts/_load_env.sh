@@ -53,6 +53,18 @@ export TF_VAR_oauth2_proxy_whitelist_domains="[\".${PUBLIC_HOSTNAME}\"]"
 export TF_VAR_keycloak_hostname="${KEYCLOAK_HOSTNAME}"
 export TF_VAR_extra_values_files='["../../onyxia-gke-public-values.yaml","../../onyxia-private-values.local.yaml"]'
 
+# GCS storage (STS bridge + user data bucket + Polaris warehouse bucket).
+# The bridge is exposed through the existing ingress-nginx LoadBalancer; point
+# STS_BRIDGE_HOSTNAME at the same IP as PUBLIC_HOSTNAME.
+export GCS_DATA_BUCKET="${GCS_DATA_BUCKET:-${PROJECT_ID}-onyxia-data}"
+export GCS_POLARIS_WAREHOUSE_BUCKET="${GCS_POLARIS_WAREHOUSE_BUCKET:-${PROJECT_ID}-onyxia-warehouse}"
+export STS_BRIDGE_HOSTNAME="${STS_BRIDGE_HOSTNAME:-sts.${PUBLIC_HOSTNAME}}"
+export TF_VAR_enable_gcs_storage="${ENABLE_GCS_STORAGE:-true}"
+export TF_VAR_gcs_data_bucket_name="${GCS_DATA_BUCKET}"
+export TF_VAR_gcs_polaris_warehouse_bucket_name="${GCS_POLARIS_WAREHOUSE_BUCKET}"
+export TF_VAR_sts_bridge_hostname="${STS_BRIDGE_HOSTNAME}"
+export TF_VAR_sts_bridge_image="${STS_BRIDGE_IMAGE:-ghcr.io/rhanka/onyxia-gcs-sts-bridge:latest}"
+
 # Sensible defaults for the recommended Keycloak setup. Override in .env.local
 # (any of these as ENABLE_*=true|false) if you want a different topology.
 export TF_VAR_enable_cert_manager="${ENABLE_CERT_MANAGER:-true}"
@@ -74,8 +86,8 @@ export TF_VAR_services_ingress_nginx_oauth2_auth="${ENABLE_OAUTH2_GLOBAL_AUTH:-f
 export TF_VAR_enable_polaris="${ENABLE_POLARIS:-false}"
 export TF_VAR_polaris_hostname="${POLARIS_HOSTNAME:-}"
 export TF_VAR_enable_polaris_storage="${ENABLE_POLARIS_STORAGE:-false}"
-export TF_VAR_polaris_warehouse_bucket="${POLARIS_WAREHOUSE_BUCKET:-}"
-export TF_VAR_polaris_warehouse_gsa_email="${POLARIS_WAREHOUSE_GSA_EMAIL:-}"
+export TF_VAR_polaris_warehouse_bucket="${POLARIS_WAREHOUSE_BUCKET:-${GCS_POLARIS_WAREHOUSE_BUCKET}}"
+export TF_VAR_polaris_warehouse_gsa_email="${POLARIS_WAREHOUSE_GSA_EMAIL:-polaris-warehouse@${PROJECT_ID}.iam.gserviceaccount.com}"
 
 # Generate the gitignored Onyxia values file from the committed template.
 TEMPLATE="${EXAMPLE_DIR}/onyxia-private-values.local.yaml.tmpl"
@@ -84,6 +96,39 @@ if [ -f "${TEMPLATE}" ]; then
   PUBLIC_HOSTNAME="${PUBLIC_HOSTNAME}" KEYCLOAK_HOSTNAME="${KEYCLOAK_HOSTNAME}" \
     envsubst '${PUBLIC_HOSTNAME} ${KEYCLOAK_HOSTNAME}' \
     < "${TEMPLATE}" > "${TARGET}"
+
+  if [ "${ENABLE_GCS_STORAGE:-true}" = "true" ]; then
+    export TARGET GCS_DATA_BUCKET STS_BRIDGE_HOSTNAME KEYCLOAK_HOSTNAME
+    python3 - <<'PY'
+import os, pathlib
+
+p = pathlib.Path(os.environ["TARGET"])
+text = p.read_text()
+block = f"""      data:
+        defaultDurationSeconds: 86400
+        monitoring:
+          enabled: false
+        S3:
+          URL: https://storage.googleapis.com
+          region: auto
+          pathStyleAccess: true
+          workingDirectory:
+            bucketMode: shared
+            bucketName: {os.environ["GCS_DATA_BUCKET"]}
+            prefix: user-
+            prefixGroup: project-
+          sts:
+            URL: https://{os.environ["STS_BRIDGE_HOSTNAME"]}/
+            durationSeconds: 86400
+            oidcConfiguration:
+              issuerUri: https://{os.environ["KEYCLOAK_HOSTNAME"]}/realms/onyxia
+              clientID: onyxia"""
+needle = "      data: {}"
+if needle not in text:
+    raise SystemExit(f"expected marker not found in {p}: {needle}")
+p.write_text(text.replace(needle, block, 1))
+PY
+  fi
 fi
 
 # Sentropic theme (optional). When ENABLE_SENTROPIC_THEME=true, regenerate the

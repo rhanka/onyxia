@@ -94,7 +94,7 @@ export function createS3Client(
                         // session token expiration time and acquisition time are defined.
                         accessKeyId: string;
                         secretAccessKey: string;
-                        sessionToken: string;
+                        sessionToken: string | undefined;
                         expirationTime: number;
                         acquisitionTime: number;
                     }>({
@@ -144,7 +144,6 @@ export function createS3Client(
                             credentials === undefined ||
                             !credentials.AccessKeyId ||
                             !credentials.SecretAccessKey ||
-                            !credentials.SessionToken ||
                             !credentials.Expiration
                         ) {
                             throw new Error(

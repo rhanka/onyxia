@@ -12,8 +12,10 @@ def test_load_config_ok(monkeypatch):
         "BRIDGE_SA_EMAIL": "bridge@p.iam.gserviceaccount.com",
     }.items():
         monkeypatch.setenv(k, v)
+    monkeypatch.setenv("CORS_ALLOW_ORIGINS", "https://onyxia.example.com, https://lab.example.com")
     c = load_config()
     assert c.project_id == "p" and c.default_duration_seconds == 86400
+    assert c.cors_allow_origins == ("https://onyxia.example.com", "https://lab.example.com")
 
 
 def test_load_config_missing(monkeypatch):
