@@ -1,0 +1,35 @@
+{
+  "id": "matchid-backend",
+  "kind": "service",
+  "title": "matchID datapep backend and front",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Marketplace component for matchID datapep backend plus front.",
+  "links": [
+    {
+      "label": "User intent",
+      "href": "docs/conductor/2026-05-17-onyxia-contributor-catalog-conductor.md"
+    }
+  ],
+  "dependencies": ["gcs-storage"],
+  "security": {
+    "auth": "To be confirmed from matchID deployment requirements",
+    "sensitivity": "unknown",
+    "notes": "Needs explicit DB, storage, ingress, secrets, and data sensitivity review."
+  },
+  "runtimeHooks": [
+    {
+      "type": "helm_chart",
+      "target": "matchID chart to be identified or created",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Identify images", "Define chart values", "Launch in Onyxia", "Smoke backend/front"],
+    "blockers": ["Need source repo/image/chart details and deployment constraints."]
+  },
+  "notes": [
+    "Should be represented as a service item and eventually as an Onyxia Helm catalog entry."
+  ]
+}

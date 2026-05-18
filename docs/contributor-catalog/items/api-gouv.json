@@ -1,0 +1,35 @@
+{
+  "id": "api-gouv",
+  "kind": "api",
+  "title": "api.gouv.fr integration",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Register api.gouv.fr APIs as discoverable and consumable API assets in Onyxia.",
+  "links": [
+    {
+      "label": "User intent",
+      "href": "docs/conductor/2026-05-17-onyxia-contributor-catalog-conductor.md"
+    }
+  ],
+  "dependencies": ["api-catalog"],
+  "security": {
+    "auth": "Depends on selected API; public/API-key/OAuth variants expected",
+    "sensitivity": "unknown",
+    "notes": "Each API must record scopes, rate limits, owner, and sample calls."
+  },
+  "runtimeHooks": [
+    {
+      "type": "api_probe",
+      "target": "First api.gouv.fr endpoint to be selected",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Select API", "Probe endpoint", "Inject config into an Onyxia service"],
+    "blockers": ["User decision needed for first API target."]
+  },
+  "notes": [
+    "Should share schema and governance with internal API catalog rather than remain a one-off connector."
+  ]
+}

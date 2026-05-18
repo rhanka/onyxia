@@ -1,0 +1,35 @@
+{
+  "id": "sent-tech-mcp",
+  "kind": "mcp_tool",
+  "title": "Sent-Tech MCP pilot",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "First limited MCP pilot for Sent-Tech/Sentec components managed through the contributor catalog.",
+  "links": [
+    {
+      "label": "MCP catalog item",
+      "href": "docs/contributor-catalog/items/mcp-catalog.json"
+    }
+  ],
+  "dependencies": ["mcp-catalog"],
+  "security": {
+    "auth": "To be designed",
+    "sensitivity": "restricted",
+    "notes": "Pilot should avoid direct mutation until audit and permission model are explicit."
+  },
+  "runtimeHooks": [
+    {
+      "type": "mcp_action",
+      "target": "Sent-Tech catalog read and UAT reporting actions",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Read-only catalog action", "UAT report action", "Audit trace"],
+    "blockers": ["Need exact Sentec/Sent-Tech component boundary."]
+  },
+  "notes": [
+    "This is the preferred first MCP vertical because it can start with low-risk read/report actions."
+  ]
+}

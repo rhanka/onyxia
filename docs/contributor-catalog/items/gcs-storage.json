@@ -1,0 +1,44 @@
+{
+  "id": "gcs-storage",
+  "kind": "connector",
+  "title": "GCS storage for Onyxia",
+  "owner": "sent-tech",
+  "status": "uat",
+  "summary": "Shared GCS data bucket exposed through Onyxia S3 compatibility and the STS bridge.",
+  "links": [
+    {
+      "label": "GCS UAT traceability",
+      "href": "docs/conductor/2026-05-17-gcs-uat-traceability.md"
+    },
+    {
+      "label": "GCS design",
+      "href": "docs/superpowers/specs/2026-05-16-onyxia-gcs-storage-design.md"
+    }
+  ],
+  "dependencies": [],
+  "security": {
+    "auth": "Keycloak OIDC to STS bridge to per-user GCS HMAC credentials",
+    "sensitivity": "internal",
+    "notes": "Access isolation is expected through user/project prefixes and per-user service accounts; UAT must prove cross-prefix denial."
+  },
+  "runtimeHooks": [
+    {
+      "type": "api_probe",
+      "target": "https://sts.onyxia.sent-tech.ca/healthz",
+      "status": "available"
+    },
+    {
+      "type": "manual",
+      "target": "Onyxia file explorer and launched IDEs",
+      "status": "planned"
+    }
+  ],
+  "uat": {
+    "status": "in_progress",
+    "checklists": ["GCS-00", "GCS-01", "GCS-02", "GCS-03", "GCS-10..GCS-60"],
+    "blockers": ["Authenticated UI and IDE tests require a real Onyxia login session."]
+  },
+  "notes": [
+    "Live config points S3 to https://storage.googleapis.com with pathStyleAccess=true and bucket sent-tech-onyxia-data."
+  ]
+}
