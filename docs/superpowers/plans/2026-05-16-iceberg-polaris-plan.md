@@ -40,7 +40,7 @@ c.create_table(("demo", "events"), schema=...)
 
 ### What
 
-Deploy `apache/polaris` (chart published on `https://apache.github.io/polaris-helm` since the 2026-02 graduation; if absent on plan-execution day, fall back to a `kustomize` manifest pinned to image `apache/polaris:1.0.0`) in namespace `polaris`, behind ingress-nginx with cert-manager.
+Deploy `apache/polaris` (chart published on `https://apache.github.io/polaris-helm` since the 2026-02 graduation; if absent on plan-execution day, fall back to a `kustomize` manifest pinned to a published image tag such as `apache/polaris:1.5.0`) in namespace `polaris`, behind ingress-nginx with cert-manager.
 
 ### Where
 
