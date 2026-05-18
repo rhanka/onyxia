@@ -136,6 +136,13 @@ if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
   echo "[init-kc] (polaris) mirror client secret into secret ${POLARIS_NAMESPACE}/${POLARIS_CLIENT_SECRET_NAME}..."
   polaris_client_uuid="$("${KCADM[@]}" get clients -r onyxia -q clientId=polaris --fields id --format csv --noquotes | tr -d '\r')"
   [ -n "${polaris_client_uuid}" ] || err "could not resolve clientId=polaris UUID"
+  kc_safe_create "audience-mapper polaris on polaris" create "clients/${polaris_client_uuid}/protocol-mappers/models" -r onyxia \
+    -s name=polaris-self-audience \
+    -s protocol=openid-connect \
+    -s protocolMapper=oidc-audience-mapper \
+    -s 'config."included.client.audience"=polaris' \
+    -s 'config."id.token.claim"=false' \
+    -s 'config."access.token.claim"=true'
   polaris_client_secret="$("${KCADM[@]}" get "clients/${polaris_client_uuid}/client-secret" -r onyxia | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   [ -n "${polaris_client_secret}" ] || err "could not read client secret for clientId=polaris"
   kubectl -n "${POLARIS_NAMESPACE}" create secret generic "${POLARIS_CLIENT_SECRET_NAME}" \
