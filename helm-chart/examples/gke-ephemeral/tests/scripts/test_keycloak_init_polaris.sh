@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Unit test for scripts/keycloak-init.sh ENABLE_POLARIS=true branch.
+# Unit test for scripts/keycloak-init.sh audience-mapper setup.
 # Shadows kubectl + curl + sleep so the script runs offline. Asserts:
+#   - the base `onyxia` audience mapper is always configured on the `onyxia`
+#     client, so user tokens carry `aud: onyxia` for the STS bridge,
 #   - create-client polaris is attempted exactly once,
 #   - the audience-mapper create command is shaped right
 #     (protocolMapper=oidc-audience-mapper, included.client.audience=polaris),
@@ -116,6 +118,10 @@ env -i \
     cat "$WORK/run3.out" >&2
     exit 1
   }
+grep -F 'protocol-mappers/models -r onyxia' "$KCMOCK_CALLS" \
+  | grep -F 'protocolMapper=oidc-audience-mapper' \
+  | grep -F 'included.client.audience"=onyxia' >/dev/null \
+  || { echo "FAIL: onyxia audience mapper missing in default path" >&2; cat "$KCMOCK_CALLS" >&2; exit 1; }
 if grep -F 'clientId=polaris' "$KCMOCK_CALLS" >/dev/null; then
   echo "FAIL: polaris client was created when ENABLE_POLARIS was not set" >&2
   exit 1

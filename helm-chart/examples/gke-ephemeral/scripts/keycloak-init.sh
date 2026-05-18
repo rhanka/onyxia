@@ -78,6 +78,20 @@ kc_safe_create "client onyxia" create clients -r onyxia \
   -s "webOrigins=[\"https://${ONYXIA_HOSTNAME}\"]" \
   -s 'attributes."pkce.code.challenge.method"=S256'
 
+echo "[init-kc] ensure audience mapper on client onyxia for aud=onyxia (idempotent)..."
+onyxia_client_uuid="$("${KCADM[@]}" get clients -r onyxia -q clientId=onyxia --fields id --format csv --noquotes | tail -n1)"
+if [ -z "${onyxia_client_uuid}" ]; then
+  echo "[init-kc] WARN: could not resolve clientId=onyxia UUID; skipping onyxia audience mapper" >&2
+else
+  kc_safe_create "audience-mapper onyxia on onyxia" create "clients/${onyxia_client_uuid}/protocol-mappers/models" -r onyxia \
+    -s name=onyxia-self-audience \
+    -s protocol=openid-connect \
+    -s protocolMapper=oidc-audience-mapper \
+    -s 'config."included.client.audience"=onyxia' \
+    -s 'config."id.token.claim"=false' \
+    -s 'config."access.token.claim"=true'
+fi
+
 echo "[init-kc] create Google identity provider (idempotent)..."
 kc_safe_create "identity-provider google" create identity-provider/instances -r onyxia \
   -s alias=google -s providerId=google -s enabled=true -s trustEmail=true \
@@ -98,8 +112,6 @@ if [ "${ENABLE_POLARIS:-false}" = "true" ]; then
     -s 'attributes."access.token.lifespan"=3600'
 
   echo "[init-kc] (polaris) ensure audience mapper on client onyxia (idempotent)..."
-  # Find the onyxia client UUID — needed to address its protocolMappers.
-  onyxia_client_uuid="$("${KCADM[@]}" get clients -r onyxia -q clientId=onyxia --fields id --format csv --noquotes | tail -n1)"
   if [ -z "${onyxia_client_uuid}" ]; then
     echo "[init-kc] WARN: could not resolve clientId=onyxia UUID; skipping audience mapper" >&2
   else
