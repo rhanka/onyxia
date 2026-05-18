@@ -27,21 +27,40 @@ Date: 2026-05-18
   - branche `fix/gcs-sts-onyxia-audience`
   - commit `d41ea0d5`
   - PR `#4`: `fix(gcs-sts): restore Onyxia audience and HMAC role`
+- Correctif live applique ensuite:
+  - ajout du role `roles/storage.hmacKeyAdmin` au service account
+    `onyxia-sts-bridge@sent-tech.iam.gserviceaccount.com`.
+- Resultat apres ce correctif IAM:
+  - le `POST https://sts.onyxia.sent-tech.ca/` est passe en `200`;
+  - mais le front affichait encore `Invalid STS response when assuming role with web identity`.
+- Cause racine #3 confirmee:
+  - le runtime web live (`inseefrlab/onyxia-web` `4.58.6`) attend encore un
+    `SessionToken` non vide dans la reponse STS;
+  - le bridge GCS renvoyait `AccessKeyId`, `SecretAccessKey`, `Expiration`,
+    mais omettait `SessionToken`.
+- Correctif repo + live applique:
+  - commit `a3af0ea0` sur le bridge STS;
+  - image redeployee:
+    `gcr.io/sent-tech/onyxia-gcs-sts-bridge:fix-a3af0ea0`;
+  - Deployment et CronJob `onyxia-sts-bridge(-rotate)` mis a jour vers ce tag.
+- Validation live:
+  - `POST https://sts.onyxia.sent-tech.ca/` retourne maintenant `200` avec
+    `SessionToken=unused-by-gcs`;
+  - les launchers `metabase` et `superset` rendent de nouveau leur formulaire.
 
 ## A faire
 
-- Appliquer en live le role IAM manquant:
-  - `roles/storage.hmacKeyAdmin` sur
-    `serviceAccount:onyxia-sts-bridge@sent-tech.iam.gserviceaccount.com`
-- Recharger le launcher `metabase` puis `superset`.
-- Verifier que le `POST https://sts.onyxia.sent-tech.ca/` passe en `200`.
-- Verifier que le formulaire launcher se rend a nouveau.
-- Ensuite seulement, reprendre les bugs propres aux charts `metabase/superset`
+- Pousser les commits `d41ea0d5` + `a3af0ea0` sur `main`.
+- Mettre a jour le mecanisme de build/deploy pour que l'image STS bridge
+  versionnee en registry reste coherente avec le repo sans patch live manuel.
+- Reprendre ensuite les bugs propres aux charts `metabase/superset`
   releves en analyse statique.
 
 ## Attendus
 
-- Accord utilisateur explicite pour la mutation IAM live ci-dessus.
+- Aucun blocage immediat pour le bridge STS.
+- Arbitrage ulterieur sur le traitement des erreurs restantes de theme
+  (`sent-tech-logo.svg` 404) qui ne bloquent pas le lancement.
 
 ## Notes chart-level
 
@@ -57,5 +76,7 @@ apres la remise en etat du bridge STS:
   - bootstrap runtime `pip install ...` lourd;
   - ressources non explicites sur web/worker/init.
 
-Conclusion: a cette heure, le blocage principal de `metabase/superset` est
-amont et transverse (`GCS/STS`), pas chart-specifique.
+Conclusion: le blocage principal observe sur `metabase/superset` etait bien
+amont et transverse (`GCS/STS`). L'IAM en faisait partie, mais pas seule:
+il fallait aussi realigner le contrat STS entre le bridge GCS et le runtime
+web effectivement deploye.
