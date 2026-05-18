@@ -5,3 +5,5 @@
 /screen-scaler
 /oidc-spa
 .superpowers/
+__pycache__/
+helm-chart/examples/gke-ephemeral/sts-bridge/uv.lock
