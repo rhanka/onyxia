@@ -89,6 +89,9 @@ export TF_VAR_polaris_hostname="${POLARIS_HOSTNAME:-}"
 export TF_VAR_enable_polaris_storage="${ENABLE_POLARIS_STORAGE:-false}"
 export TF_VAR_polaris_warehouse_bucket="${POLARIS_WAREHOUSE_BUCKET:-${GCS_POLARIS_WAREHOUSE_BUCKET}}"
 export TF_VAR_polaris_warehouse_gsa_email="${POLARIS_WAREHOUSE_GSA_EMAIL:-polaris-warehouse@${PROJECT_ID}.iam.gserviceaccount.com}"
+if [ -n "${POLARIS_IMAGE:-}" ]; then
+  export TF_VAR_polaris_image="${POLARIS_IMAGE}"
+fi
 
 # Generate the gitignored Onyxia values file from the committed template.
 TEMPLATE="${EXAMPLE_DIR}/onyxia-private-values.local.yaml.tmpl"

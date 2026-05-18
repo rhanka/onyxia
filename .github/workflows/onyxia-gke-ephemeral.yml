@@ -46,9 +46,11 @@ jobs:
       SENTROPIC_HEADER_TEXT_BOLD:  ${{ vars.SENTROPIC_HEADER_TEXT_BOLD }}
       SENTROPIC_HEADER_TEXT_FOCUS: ${{ vars.SENTROPIC_HEADER_TEXT_FOCUS }}
       SENTROPIC_THEME_VERSION:     ${{ vars.SENTROPIC_THEME_VERSION }}
+      STS_BRIDGE_IMAGE:            ${{ vars.STS_BRIDGE_IMAGE }}
       ENABLE_POLARIS:              ${{ vars.ENABLE_POLARIS }}
       POLARIS_HOSTNAME:            ${{ vars.POLARIS_HOSTNAME }}
       ENABLE_POLARIS_STORAGE:      ${{ vars.ENABLE_POLARIS_STORAGE }}
+      POLARIS_IMAGE:               ${{ vars.POLARIS_IMAGE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -87,9 +89,11 @@ jobs:
           SENTROPIC_HEADER_TEXT_BOLD=${SENTROPIC_HEADER_TEXT_BOLD}
           SENTROPIC_HEADER_TEXT_FOCUS=${SENTROPIC_HEADER_TEXT_FOCUS}
           SENTROPIC_THEME_VERSION=${SENTROPIC_THEME_VERSION}
+          STS_BRIDGE_IMAGE=${STS_BRIDGE_IMAGE}
           ENABLE_POLARIS=${ENABLE_POLARIS:-false}
           POLARIS_HOSTNAME=${POLARIS_HOSTNAME}
           ENABLE_POLARIS_STORAGE=${ENABLE_POLARIS_STORAGE:-false}
+          POLARIS_IMAGE=${POLARIS_IMAGE}
           EOF
 
       # ---------------- init mode ----------------
