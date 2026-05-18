@@ -2,8 +2,12 @@
 
 Onyxia's frontend speaks the AWS STS XML protocol. We mint static HMAC pairs
 but hand them back inside an STS-shaped envelope so the existing Onyxia code
-path stays unchanged. GCS HMAC has no session-token concept, so we omit
-SessionToken instead of returning a dummy value that S3 clients would sign.
+path stays unchanged.
+
+GCS HMAC has no real session-token concept. However, the released Onyxia
+runtime currently deployed in the GKE example still expects a non-empty
+`SessionToken` field in the STS response before it accepts the credentials.
+We therefore return a stable sentinel token value.
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from xml.sax.saxutils import escape
 
 _NS = "https://sts.amazonaws.com/doc/2011-06-15/"
+_SESSION_TOKEN_SENTINEL = "unused-by-gcs"
 
 
 def assume_role_response(access_key: str, secret_key: str, subject: str, duration_s: int) -> str:
@@ -25,6 +30,7 @@ def assume_role_response(access_key: str, secret_key: str, subject: str, duratio
         "    <Credentials>\n"
         f"      <AccessKeyId>{ak}</AccessKeyId>\n"
         f"      <SecretAccessKey>{sk}</SecretAccessKey>\n"
+        f"      <SessionToken>{_SESSION_TOKEN_SENTINEL}</SessionToken>\n"
         f"      <Expiration>{exp}</Expiration>\n"
         "    </Credentials>\n"
         "    <AssumedRoleUser>\n"
