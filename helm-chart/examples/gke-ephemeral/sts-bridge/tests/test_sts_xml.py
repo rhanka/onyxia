@@ -14,12 +14,13 @@ def test_assume_role_xml_shape():
     assert ak == "AKIA..." and sk == "sk..."
 
 
-def test_assume_role_xml_contains_session_token_and_expiration():
+def test_assume_role_xml_omits_session_token_and_contains_expiration():
     xml = assume_role_response("AKIA...", "sk...", "abc", 3600)
     root = ET.fromstring(xml)
-    # Onyxia / AWS SDK clients expect both elements even if SessionToken is empty.
-    session = root.find(f".//{{{NS}}}SessionToken")
-    assert session is not None
+    # GCS HMAC credentials are long-lived access/secret pairs. Returning a
+    # dummy SessionToken makes AWS SDK S3 clients sign x-amz-security-token,
+    # which GCS interop does not need.
+    assert root.find(f".//{{{NS}}}SessionToken") is None
     exp = root.find(f".//{{{NS}}}Expiration")
     assert exp is not None and exp.text and exp.text.endswith("Z")
 

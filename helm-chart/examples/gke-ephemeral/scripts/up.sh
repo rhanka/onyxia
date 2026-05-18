@@ -13,14 +13,13 @@ source "${SCRIPT_DIR}/common.sh"
 
 require_tool tofu
 
-log "tofu init"
-( cd "${TF_APP_DIR}" && tofu init -input=false -upgrade=false )
-
 log "tofu apply"
-( cd "${TF_APP_DIR}" && tofu apply -input=false -auto-approve )
+"${SCRIPT_DIR}/_tofu.sh" app apply -input=false -auto-approve
 
 log "configure kubectl context"
 kube_ctx_for_cluster
 
 log "done. helm releases:"
-helm list -A
+if ! helm list -A; then
+  warn "helm list failed; if kubectl reports gke-gcloud-auth-plugin missing, run ./scripts/bootstrap.sh or install google-cloud-sdk-gke-gcloud-auth-plugin locally."
+fi

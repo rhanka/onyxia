@@ -18,6 +18,7 @@ class Config:
     k8s_namespace: str
     bridge_sa_email: str
     default_duration_seconds: int
+    cors_allow_origins: tuple[str, ...]
 
 
 _REQUIRED = [
@@ -42,4 +43,9 @@ def load_config() -> Config:
         k8s_namespace=os.environ["K8S_NAMESPACE"],
         bridge_sa_email=os.environ["BRIDGE_SA_EMAIL"],
         default_duration_seconds=int(os.environ.get("DEFAULT_DURATION_SECONDS", "86400")),
+        cors_allow_origins=tuple(
+            origin.strip()
+            for origin in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",")
+            if origin.strip()
+        ),
     )

@@ -22,6 +22,15 @@ from typing import Optional, Tuple
 log = logging.getLogger("sts-bridge.gcp_provision")
 
 
+class HmacQuotaExceeded(RuntimeError):
+    """Raised when GCS rejects HMAC creation because the per-SA 10-key cap is full.
+
+    Caller (FastAPI handler) is expected to translate this into HTTP 503 so the
+    Onyxia API can surface a clear "service degraded, retry in <rotation
+    interval>" message rather than a generic 500.
+    """
+
+
 def sub_short(sub: str) -> str:
     """Stable, short, GCP-SA-name-safe identifier derived from a JWT sub."""
     return hashlib.sha256(sub.encode()).hexdigest()[:12]
@@ -58,16 +67,44 @@ def _k8s_secret_get(k8s, namespace: str, name: str) -> Optional[Tuple[str, str]]
     return None
 
 
-def _k8s_secret_put(k8s, namespace: str, name: str, ak: str, sk: str) -> None:
-    """Upsert the cache Secret idempotently."""
+def _k8s_label_safe(value: str) -> str:
+    """Coerce an arbitrary string into a Kubernetes label-value-safe form.
+
+    Label values must match `[A-Za-z0-9._-]{1,63}` — emails contain `@` which
+    is forbidden. We replace `@` with `-` (the SA email is still recoverable
+    by reading the bridge env).
+    """
+    return value.replace("@", "-")[:63]
+
+
+def _k8s_secret_put(
+    k8s,
+    namespace: str,
+    name: str,
+    ak: str,
+    sk: str,
+    bridge_sa_email: Optional[str] = None,
+) -> None:
+    """Upsert the cache Secret idempotently.
+
+    When `bridge_sa_email` is provided, label the Secret with
+    `onyxia.dev/bridge-sa=<email>` so operators can `kubectl get secret -l`
+    to trace every cached HMAC back to the bridge identity that minted it
+    (audit trail; GCS HMAC ops do not show up in Cloud Audit Logs).
+    """
     from kubernetes import client as kc
 
     data = {
         "access_key": base64.b64encode(ak.encode()).decode(),
         "secret_key": base64.b64encode(sk.encode()).decode(),
     }
+    labels = (
+        {"onyxia.dev/bridge-sa": _k8s_label_safe(bridge_sa_email)}
+        if bridge_sa_email
+        else {}
+    )
     body = kc.V1Secret(
-        metadata=kc.V1ObjectMeta(name=name),
+        metadata=kc.V1ObjectMeta(name=name, labels=labels),
         data=data,
         type="Opaque",
     )
@@ -105,13 +142,34 @@ def _gcp_get_or_create_sa(iam, project: str, short: str) -> str:
     return email
 
 
+def _binding_title(b) -> Optional[str]:
+    """Extract IAM Condition title from either a dict-shaped or attr-shaped binding."""
+    cond = b.get("condition") if isinstance(b, dict) else getattr(b, "condition", None)
+    if cond is None:
+        return None
+    if isinstance(cond, dict):
+        return cond.get("title")
+    return getattr(cond, "title", None)
+
+
 def _gcp_bind_prefix_iam(gcs, bucket: str, sa_email: str, short: str) -> None:
-    """Grant objectAdmin scoped to `user-<short>/*` via IAM Condition."""
+    """Grant objectAdmin scoped to `user-<short>/*` via IAM Condition.
+
+    Idempotent: if a binding with `condition.title == f"prefix-{short}"`
+    already exists the call is a no-op (no `set_iam_policy` round-trip). This
+    avoids monotonically growing the bucket IAM policy across reconnects, a
+    bug the code reviewer flagged (M3).
+    """
+    title = f"prefix-{short}"
     b = gcs.bucket(bucket)
     policy = b.get_iam_policy(requested_policy_version=3)
     policy.version = 3
+    for existing in policy.bindings:
+        if _binding_title(existing) == title:
+            log.debug("IAM binding %s already present, skipping", title)
+            return
     cond = {
-        "title": f"prefix-{short}",
+        "title": title,
         "description": f"Only user-{short}/* in {bucket}",
         "expression": (
             f'resource.name.startsWith("projects/_/buckets/{bucket}'
@@ -129,11 +187,34 @@ def _gcp_bind_prefix_iam(gcs, bucket: str, sa_email: str, short: str) -> None:
 
 
 def _gcp_mint_hmac(gcs, project: str, sa_email: str) -> Tuple[str, str]:
-    """Mint a fresh HMAC pair for the given SA. Quota: 10 active keys / SA."""
-    key_meta, secret = gcs.create_hmac_key(
-        service_account_email=sa_email,
-        project_id=project,
-    )
+    """Mint a fresh HMAC pair for the given SA.
+
+    GCS caps HMAC keys at 10 active per SA. When the cap is hit, the client
+    raises `google.api_core.exceptions.ResourceExhausted` (or a generic
+    exception whose str() contains "quota"). We translate either into
+    `HmacQuotaExceeded` (M2 fix) so the HTTP layer can answer 503 instead of
+    silently bubbling a 500 to the user.
+    """
+    try:
+        key_meta, secret = gcs.create_hmac_key(
+            service_account_email=sa_email,
+            project_id=project,
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        is_quota = (
+            "quota" in msg
+            or "resourceexhausted" in type(exc).__name__.lower()
+            or "resource exhausted" in msg
+        )
+        if is_quota:
+            log.warning(
+                "HMAC quota exceeded for sa=%s: %s — daily rotation CronJob will recycle keys",
+                sa_email,
+                exc,
+            )
+            raise HmacQuotaExceeded(str(exc)) from exc
+        raise
     return key_meta.access_id, secret
 
 
@@ -146,20 +227,39 @@ def provision_user_credentials(
     namespace: str,
     k8s=None,
     gcp=None,
+    bridge_sa_email: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return (access_key, secret_key) for a Keycloak user, provisioning as needed."""
+    """Return (access_key, secret_key) for a Keycloak user, provisioning as needed.
+
+    `bridge_sa_email` is the GSA the bridge pod itself runs as (via Workload
+    Identity). When supplied it is recorded as a label on the K8s cache
+    Secret for auditability; HMAC ops do not show up in Cloud Audit Logs so
+    this label is the only durable record of "who minted what".
+    """
     short = sub_short(sub)
     if k8s is None:
         k8s = _k8s_client()
     cached = _k8s_secret_get(k8s, namespace, _secret_name(short))
     if cached and cached[0] and cached[1]:
-        log.info("cache hit for sub_short=%s", short)
+        log.info("cache hit for sub_short=%s bridge_sa=%s", short, bridge_sa_email or "?")
         return cached
 
     iam, gcs = gcp if gcp else _gcp_clients()
     sa_email = _gcp_get_or_create_sa(iam, project, short)
     _gcp_bind_prefix_iam(gcs, bucket, sa_email, short)
     ak, sk = _gcp_mint_hmac(gcs, project, sa_email)
-    _k8s_secret_put(k8s, namespace, _secret_name(short), ak, sk)
-    log.info("provisioned new HMAC for sub_short=%s sa=%s", short, sa_email)
+    _k8s_secret_put(
+        k8s,
+        namespace,
+        _secret_name(short),
+        ak,
+        sk,
+        bridge_sa_email=bridge_sa_email,
+    )
+    log.info(
+        "provisioned new HMAC sub_short=%s user_sa=%s bridge_sa=%s",
+        short,
+        sa_email,
+        bridge_sa_email or "?",
+    )
     return ak, sk

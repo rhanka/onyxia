@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Form, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import load_config
-from app.gcp_provision import provision_user_credentials, sub_short
+from app.gcp_provision import HmacQuotaExceeded, provision_user_credentials, sub_short
 from app.jwt_verify import InvalidToken, verify_token
 from app.sts_xml import assume_role_response
 
@@ -21,6 +22,14 @@ log = logging.getLogger("sts-bridge")
 
 app = FastAPI(title="onyxia-gcs-sts-bridge")
 cfg = load_config()
+
+if cfg.cors_allow_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(cfg.cors_allow_origins),
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 
 @app.get("/healthz")
@@ -42,12 +51,23 @@ def assume_role(
         raise HTTPException(status_code=401, detail=f"invalid token: {e}") from e
 
     sub = claims["sub"]
-    ak, sk = provision_user_credentials(
-        sub=sub,
-        project=cfg.project_id,
-        bucket=cfg.bucket,
-        namespace=cfg.k8s_namespace,
-    )
+    try:
+        ak, sk = provision_user_credentials(
+            sub=sub,
+            project=cfg.project_id,
+            bucket=cfg.bucket,
+            namespace=cfg.k8s_namespace,
+            bridge_sa_email=cfg.bridge_sa_email,
+        )
+    except HmacQuotaExceeded as e:
+        # GCS caps active HMAC keys at 10 per service account. The daily
+        # rotation CronJob (app/rotate.py) recycles the oldest > 24 h keys,
+        # so 503 is the right "retry later" signal for the Onyxia API.
+        log.warning("HMAC quota exceeded for sub_short=%s: %s", sub_short(sub), e)
+        raise HTTPException(
+            status_code=503,
+            detail="HMAC quota exceeded for service account; daily rotation will recycle keys",
+        ) from e
     dur = DurationSeconds or cfg.default_duration_seconds
     log.info("issued creds sub_short=%s dur=%s", sub_short(sub), dur)
     return Response(

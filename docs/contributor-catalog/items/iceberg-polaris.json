@@ -1,0 +1,44 @@
+{
+  "id": "iceberg-polaris",
+  "kind": "iceberg_catalog",
+  "title": "Apache Polaris Iceberg catalog",
+  "owner": "sent-tech",
+  "status": "plan",
+  "summary": "Iceberg REST catalog target for the GCS warehouse bucket.",
+  "links": [
+    {
+      "label": "Iceberg design",
+      "href": "docs/superpowers/specs/2026-05-16-iceberg-lakehouse-catalog-design.md"
+    },
+    {
+      "label": "Polaris plan",
+      "href": "docs/superpowers/plans/2026-05-16-iceberg-polaris-plan.md"
+    }
+  ],
+  "dependencies": ["gcs-storage"],
+  "security": {
+    "auth": "Keycloak/OIDC planned, GCS Workload Identity for warehouse service account",
+    "sensitivity": "internal",
+    "notes": "Warehouse isolation and vended credentials must be validated before production use."
+  },
+  "runtimeHooks": [
+    {
+      "type": "job",
+      "target": "helm-chart/examples/gke-ephemeral/scripts/polaris-init.sh",
+      "status": "planned"
+    },
+    {
+      "type": "api_probe",
+      "target": "https://polaris.onyxia.sent-tech.ca/api/catalog/v1/config",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Polaris REST config", "PyIceberg write/read", "warehouse object evidence"],
+    "blockers": ["Wait for GCS UAT baseline before enabling Polaris."]
+  },
+  "notes": [
+    "Polaris is preferred over Lakekeeper for v1 to match SSPCloud fidelity."
+  ]
+}

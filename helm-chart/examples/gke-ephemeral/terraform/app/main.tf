@@ -55,6 +55,33 @@ locals {
     for domain in var.oauth2_proxy_whitelist_domains : "--whitelist-domain=${domain}"
   ]
   oauth2_proxy_redirect_url = "https://${var.public_hostname}/oauth2/callback"
+  gcs_data_bucket_name_effective = (
+    var.gcs_data_bucket_name != "" ? var.gcs_data_bucket_name : "${var.project_id}-onyxia-data"
+  )
+  gcs_polaris_warehouse_bucket_name_effective = (
+    var.gcs_polaris_warehouse_bucket_name != "" ? var.gcs_polaris_warehouse_bucket_name : "${var.project_id}-onyxia-warehouse"
+  )
+  sts_bridge_hostname_effective = (
+    var.sts_bridge_hostname != "" ? var.sts_bridge_hostname : "sts.${var.public_hostname}"
+  )
+  polaris_warehouse_bucket_effective = (
+    var.polaris_warehouse_bucket != ""
+    ? var.polaris_warehouse_bucket
+    : (
+      var.enable_gcs_storage
+      ? module.gcs_storage[0].polaris_warehouse_bucket_name
+      : ""
+    )
+  )
+  polaris_warehouse_gsa_email_effective = (
+    var.polaris_warehouse_gsa_email != ""
+    ? var.polaris_warehouse_gsa_email
+    : (
+      var.enable_gcs_storage
+      ? module.gcs_storage[0].polaris_warehouse_gsa_email
+      : ""
+    )
+  )
   services_ingress_nginx_controller_config = merge(
     {
       "force-ssl-redirect"        = "true"
@@ -385,6 +412,15 @@ resource "kubernetes_persistent_volume_claim_v1" "keycloak_db" {
 resource "kubernetes_deployment_v1" "keycloak_db" {
   count = var.enable_keycloak && var.keycloak_persist_realm ? 1 : 0
 
+  lifecycle {
+    ignore_changes = [
+      metadata[0].annotations,
+      spec[0].template[0].spec[0].container[0].security_context,
+      spec[0].template[0].spec[0].security_context,
+      spec[0].template[0].spec[0].toleration,
+    ]
+  }
+
   metadata {
     name      = "keycloak-db"
     namespace = kubernetes_namespace.keycloak[0].metadata[0].name
@@ -426,8 +462,8 @@ resource "kubernetes_deployment_v1" "keycloak_db" {
             name           = "tcp-postgres"
           }
           resources {
-            requests = { cpu = "100m", memory = "256Mi" }
-            limits   = { memory = "512Mi" }
+            requests = { cpu = "100m", memory = "256Mi", "ephemeral-storage" = "1Gi" }
+            limits   = { memory = "512Mi", "ephemeral-storage" = "1Gi" }
           }
           volume_mount {
             name       = "data"
@@ -577,6 +613,35 @@ resource "kubernetes_manifest" "keycloak_ingress" {
   depends_on = [helm_release.keycloak]
 }
 
+module "gcs_storage" {
+  count = var.enable_gcs_storage ? 1 : 0
+
+  source = "../data"
+
+  project_id                       = var.project_id
+  region                           = var.region
+  namespace                        = kubernetes_namespace.onyxia.metadata[0].name
+  public_hostname                  = var.public_hostname
+  data_bucket_name                 = local.gcs_data_bucket_name_effective
+  polaris_warehouse_bucket_name    = local.gcs_polaris_warehouse_bucket_name_effective
+  bucket_location                  = var.gcs_bucket_location
+  bridge_image                     = var.sts_bridge_image
+  bridge_hostname                  = local.sts_bridge_hostname_effective
+  oidc_issuer                      = "https://${var.keycloak_hostname}/realms/onyxia"
+  oidc_audience                    = "onyxia"
+  ingress_class_name               = var.services_ingress_class_name
+  cert_manager_cluster_issuer_name = var.cert_manager_cluster_issuer_name
+  polaris_namespace                = var.polaris_namespace
+  polaris_ksa_name                 = var.polaris_release_name
+
+  depends_on = [
+    kubernetes_namespace.onyxia,
+    helm_release.services_ingress_nginx,
+    kubernetes_manifest.cert_manager_cluster_issuer,
+    kubernetes_manifest.keycloak_ingress,
+  ]
+}
+
 # ----------------------------------------------------------------------------
 # Optional Apache Polaris Iceberg catalog (Section 1+2 of the implementation
 # plan in docs/superpowers/plans/2026-05-16-iceberg-polaris-plan.md).
@@ -719,8 +784,8 @@ resource "kubernetes_service_account_v1" "polaris" {
     name      = var.polaris_release_name
     namespace = kubernetes_namespace.polaris[0].metadata[0].name
 
-    annotations = var.enable_polaris_storage && var.polaris_warehouse_gsa_email != "" ? {
-      "iam.gke.io/gcp-service-account" = var.polaris_warehouse_gsa_email
+    annotations = var.enable_polaris_storage && local.polaris_warehouse_gsa_email_effective != "" ? {
+      "iam.gke.io/gcp-service-account" = local.polaris_warehouse_gsa_email_effective
     } : {}
 
     labels = {
@@ -940,7 +1005,8 @@ resource "helm_release" "onyxia" {
     google_compute_global_address.ingress,
     kubernetes_manifest.managed_certificate,
     kubernetes_manifest.cert_manager_cluster_issuer,
-    helm_release.services_ingress_nginx
+    helm_release.services_ingress_nginx,
+    module.gcs_storage
   ]
 }
 

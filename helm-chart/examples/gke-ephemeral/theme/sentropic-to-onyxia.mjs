@@ -26,31 +26,39 @@
 
 import { toOnyxiaPalettes, toOnyxiaFont } from './lib/mapping.mjs';
 import { json5Stringify } from './lib/json5-stringify.mjs';
+import { fileURLToPath } from 'node:url';
 
-function requireEnv(name) {
-  const v = process.env[name];
+function requireEnv(name, env) {
+  const v = env[name];
   if (!v || v.trim() === '') {
-    console.error(`ERROR: ${name} is required (export it before running the generator).`);
-    process.exit(2);
+    const err = new Error(`${name} is required (export it before running the generator).`);
+    err.exitCode = 2;
+    throw err;
   }
   return v;
 }
 
-async function main() {
-  const HEADER_LOGO         = requireEnv('SENTROPIC_HEADER_LOGO_URL');
-  const HEADER_TEXT_BOLD    = requireEnv('SENTROPIC_HEADER_TEXT_BOLD');
-  const HEADER_TEXT_FOCUS   = requireEnv('SENTROPIC_HEADER_TEXT_FOCUS');
-  const TAB_TITLE   = process.env.SENTROPIC_TAB_TITLE
+export async function generateWebEnv({
+  env = process.env,
+  importThemeModule = () => import('@sentropic/design-system-themes')
+} = {}) {
+  const HEADER_LOGO         = requireEnv('SENTROPIC_HEADER_LOGO_URL', env);
+  const HEADER_TEXT_BOLD    = requireEnv('SENTROPIC_HEADER_TEXT_BOLD', env);
+  const HEADER_TEXT_FOCUS   = requireEnv('SENTROPIC_HEADER_TEXT_FOCUS', env);
+  const TAB_TITLE   = env.SENTROPIC_TAB_TITLE
     || `${HEADER_TEXT_BOLD} ${HEADER_TEXT_FOCUS} · Onyxia`;
-  const FAVICON     = process.env.SENTROPIC_FAVICON_URL || HEADER_LOGO;
-  const VERSION     = process.env.SENTROPIC_THEME_VERSION || 'v0.5.0';
-  const INJECT_FONT = process.env.SENTROPIC_INJECT_FONT === 'true';
+  const FAVICON     = env.SENTROPIC_FAVICON_URL || HEADER_LOGO;
+  const VERSION     = env.SENTROPIC_THEME_VERSION || 'v0.5.0';
+  const INJECT_FONT = env.SENTROPIC_INJECT_FONT === 'true';
 
-  const mod = await import('@sentropic/design-system-themes');
+  const mod = await importThemeModule();
   const theme = mod.sentTechTheme || mod.default?.sentTechTheme;
   if (!theme) {
-    console.error('ERROR: @sentropic/design-system-themes did not export `sentTechTheme`. Exports:', Object.keys(mod));
-    process.exit(3);
+    const err = new Error(
+      `@sentropic/design-system-themes did not export sentTechTheme. Exports: ${Object.keys(mod).join(', ')}`
+    );
+    err.exitCode = 3;
+    throw err;
   }
 
   const { light, dark } = toOnyxiaPalettes(theme);
@@ -69,8 +77,11 @@ async function main() {
   if (INJECT_FONT) {
     const fontFoundation = mod.foundation?.font || mod.default?.foundation?.font;
     if (!fontFoundation) {
-      console.error('ERROR: @sentropic/design-system-themes did not export `foundation.font`. Exports:', Object.keys(mod));
-      process.exit(3);
+      const err = new Error(
+        `@sentropic/design-system-themes did not export foundation.font. Exports: ${Object.keys(mod).join(', ')}`
+      );
+      err.exitCode = 3;
+      throw err;
     }
     const font = toOnyxiaFont(fontFoundation, { version: VERSION });
     lines.push(`FONT: |-\n${indent(json5Stringify(font), 2)}`);
@@ -89,7 +100,7 @@ async function main() {
     `TAB_TITLE: ${yamlString(TAB_TITLE)}`,
     `FAVICON: ${yamlString(FAVICON)}`
   );
-  process.stdout.write(lines.join('\n') + '\n');
+  return lines.join('\n') + '\n';
 }
 
 function indent(s, n) {
@@ -111,13 +122,21 @@ function assertPalette(name, p) {
   for (const path of required) {
     const [a, b] = path.split('.');
     if (!p[a] || !p[a][b]) {
-      console.error(`ERROR: ${name} palette is missing ${path} — mapping or sentropic schema drift.`);
-      process.exit(4);
+      const err = new Error(`${name} palette is missing ${path} - mapping or sentropic schema drift.`);
+      err.exitCode = 4;
+      throw err;
     }
   }
 }
 
-main().catch(err => {
-  console.error('ERROR:', err.stack || err.message);
-  process.exit(1);
-});
+async function main() {
+  const output = await generateWebEnv();
+  process.stdout.write(output);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch(err => {
+    console.error('ERROR:', err.message);
+    process.exit(err.exitCode ?? 1);
+  });
+}

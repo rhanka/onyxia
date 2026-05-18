@@ -1,0 +1,40 @@
+{
+  "id": "data-gouv",
+  "kind": "data_source",
+  "title": "data.gouv.fr connector",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Public data source to register in the contributor catalog and materialize into Onyxia storage/dataprep targets.",
+  "links": [
+    {
+      "label": "User intent",
+      "href": "docs/conductor/2026-05-17-onyxia-contributor-catalog-conductor.md"
+    }
+  ],
+  "dependencies": ["gcs-storage"],
+  "security": {
+    "auth": "Public source; destination access controlled by Onyxia/GCS",
+    "sensitivity": "public",
+    "notes": "Dataset licence and refresh metadata must be recorded per dataset."
+  },
+  "runtimeHooks": [
+    {
+      "type": "dag",
+      "target": "datagouv_sync",
+      "status": "draft"
+    },
+    {
+      "type": "job",
+      "target": "dataset materialization to GCS",
+      "status": "planned"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Select dataset", "Materialize to GCS", "Open in dataprep or database service"],
+    "blockers": ["User decision needed for first datasets and destination target."]
+  },
+  "notes": [
+    "Previous direct data.gouv implementation is abandoned for now; this draft keeps the intent under the meta-catalog track."
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "matchid-deces",
+  "kind": "service",
+  "title": "deces.matchid.io",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Marketplace component for deces.matchid.io as a separate Onyxia-contributor service.",
+  "links": [
+    {
+      "label": "User intent",
+      "href": "docs/conductor/2026-05-17-onyxia-contributor-catalog-conductor.md"
+    }
+  ],
+  "dependencies": ["matchid-backend"],
+  "security": {
+    "auth": "To be confirmed from deces.matchid.io deployment requirements",
+    "sensitivity": "unknown",
+    "notes": "Must confirm data exposure, ingress, and privacy constraints before deployment."
+  },
+  "runtimeHooks": [
+    {
+      "type": "helm_chart",
+      "target": "deces.matchid.io chart to be identified or created",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Identify image/source", "Define chart", "Launch in Onyxia", "Smoke public route"],
+    "blockers": ["Need source repo/image/chart details and whether it shares backend resources."]
+  },
+  "notes": [
+    "Kept as a distinct item from matchID backend/front as requested."
+  ]
+}

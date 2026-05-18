@@ -1,0 +1,35 @@
+{
+  "id": "api-catalog",
+  "kind": "api",
+  "title": "Onyxia API catalog",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Catalog of internal and external APIs, including Kafka/event streams, to make service connections explicit.",
+  "links": [
+    {
+      "label": "Research note",
+      "href": "docs/conductor/2026-05-17-contributor-catalog-research-note.md"
+    }
+  ],
+  "dependencies": [],
+  "security": {
+    "auth": "Per API entry",
+    "sensitivity": "unknown",
+    "notes": "The catalog must record auth type, scopes, rate limits, and environment boundaries."
+  },
+  "runtimeHooks": [
+    {
+      "type": "none",
+      "target": "Draft registry only",
+      "status": "not_applicable"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Schema review", "First internal API entry", "Kafka representation decision"],
+    "blockers": ["Decision needed: separate API catalog or facet of contributor catalog."]
+  },
+  "notes": [
+    "Onyxia region already has a Kafka runtime field; the contributor catalog should describe API/event assets around that runtime capability."
+  ]
+}

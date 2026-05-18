@@ -1,0 +1,35 @@
+{
+  "id": "mcp-catalog",
+  "kind": "mcp_tool",
+  "title": "Onyxia MCP catalog",
+  "owner": "sent-tech",
+  "status": "brainstorm",
+  "summary": "Registry of MCP actions that make Onyxia components discoverable and safely actionable by agents.",
+  "links": [
+    {
+      "label": "Research note",
+      "href": "docs/conductor/2026-05-17-contributor-catalog-research-note.md"
+    }
+  ],
+  "dependencies": ["gcs-storage"],
+  "security": {
+    "auth": "To be designed; likely OIDC delegated actions plus audit logs",
+    "sensitivity": "restricted",
+    "notes": "MCP actions must be least-privilege and auditable before touching user/project resources."
+  },
+  "runtimeHooks": [
+    {
+      "type": "mcp_action",
+      "target": "List catalog items, read UAT status, propose service launch",
+      "status": "draft"
+    }
+  ],
+  "uat": {
+    "status": "not_started",
+    "checklists": ["Define allowed actions", "Audit model", "First Sent-Tech action"],
+    "blockers": ["User decision needed on allowed action scope and privilege level."]
+  },
+  "notes": [
+    "Initial MCP scope should be read-heavy and proposal-oriented before allowing mutating actions."
+  ]
+}

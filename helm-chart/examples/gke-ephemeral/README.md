@@ -565,6 +565,38 @@ The generator is intentionally thin (~80 LOC). Copy `theme/sentropic-to-onyxia.m
 
 V1 ships colors + fonts + logo + header strings. Component **shape** (button radius, drawer geometry) is not covered — that needs a fork of `onyxia-ui` and is deliberately deferred.
 
+## GCS Data Storage
+
+The GCS workpackage adds an STS bridge for Onyxia's existing S3 path. It uses
+GCS interoperability at `https://storage.googleapis.com`, creates a shared
+`<project>-onyxia-data` bucket for user files, and mints one HMAC key per
+Keycloak `sub` through a per-user GCP service account. User data is scoped to
+`user-<sub_short>/` with a bucket IAM Condition.
+
+The bridge is exposed on the **existing ingress-nginx LoadBalancer**. It does
+not create a new cluster or a second public LB. Add this DNS record to the same
+IP as `PUBLIC_HOSTNAME`:
+
+```text
+A   sts.onyxia.example.com   <services_ingress_nginx_ip>
+```
+
+Relevant `.env.local` knobs:
+
+```bash
+ENABLE_GCS_STORAGE=true
+GCS_DATA_BUCKET=my-gcp-project-onyxia-data
+GCS_POLARIS_WAREHOUSE_BUCKET=my-gcp-project-onyxia-warehouse
+STS_BRIDGE_HOSTNAME=sts.onyxia.example.com
+STS_BRIDGE_IMAGE=ghcr.io/rhanka/onyxia-gcs-sts-bridge:latest
+```
+
+When `ENABLE_GCS_STORAGE=true`, `scripts/_load_env.sh` injects the `region.data`
+S3 config into `onyxia-private-values.local.yaml`, including the STS bridge URL
+and `workingDirectory` prefix. The same Terraform module also creates the
+`<project>-onyxia-warehouse` bucket and `polaris-warehouse@...` service account
+used by the Polaris/Iceberg track.
+
 ## Pause And Resume
 
 Destroy the disposable layers:
@@ -605,5 +637,6 @@ helm-chart/examples/gke-ephemeral/
 └── terraform/
     ├── base/      # backup bucket
     ├── cluster/   # GKE Autopilot + VPC
-    └── app/       # Onyxia + ingress-nginx + cert-manager
+    ├── app/       # Onyxia + ingress-nginx + cert-manager
+    └── data/      # GCS buckets + STS bridge + Polaris warehouse identity
 ```

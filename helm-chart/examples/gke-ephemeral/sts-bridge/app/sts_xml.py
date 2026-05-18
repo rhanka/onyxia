@@ -1,9 +1,9 @@
 """AWS STS XML response builder for AssumeRoleWithWebIdentity.
 
-Onyxia API speaks the AWS STS XML protocol. We mint static HMAC pairs but
-hand them back inside an STS-shaped envelope so the existing Onyxia code path
-stays unchanged. SessionToken is intentionally empty (GCS HMAC has no concept
-of a session token).
+Onyxia's frontend speaks the AWS STS XML protocol. We mint static HMAC pairs
+but hand them back inside an STS-shaped envelope so the existing Onyxia code
+path stays unchanged. GCS HMAC has no session-token concept, so we omit
+SessionToken instead of returning a dummy value that S3 clients would sign.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ def assume_role_response(access_key: str, secret_key: str, subject: str, duratio
         "    <Credentials>\n"
         f"      <AccessKeyId>{ak}</AccessKeyId>\n"
         f"      <SecretAccessKey>{sk}</SecretAccessKey>\n"
-        "      <SessionToken></SessionToken>\n"
         f"      <Expiration>{exp}</Expiration>\n"
         "    </Credentials>\n"
         "    <AssumedRoleUser>\n"
