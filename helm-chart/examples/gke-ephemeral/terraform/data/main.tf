@@ -65,6 +65,12 @@ resource "google_project_iam_member" "bridge_storage_admin" {
   member  = "serviceAccount:${google_service_account.bridge.email}"
 }
 
+resource "google_project_iam_member" "bridge_hmac_key_admin" {
+  project = var.project_id
+  role    = "roles/storage.hmacKeyAdmin"
+  member  = "serviceAccount:${google_service_account.bridge.email}"
+}
+
 resource "google_project_iam_member" "bridge_sa_admin" {
   project = var.project_id
   role    = "roles/iam.serviceAccountAdmin"
