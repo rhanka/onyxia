@@ -73,6 +73,16 @@ exit 0
 MOCK
 chmod +x "$WORK/curl"
 
+cat > "$WORK/kubectl" <<'MOCK'
+#!/usr/bin/env bash
+if printf '%s\n' "$*" | grep -F 'get secret polaris-client' >/dev/null; then
+  printf '%s' 'c2VjcmV0LWZyb20tazhz'
+  exit 0
+fi
+exit 1
+MOCK
+chmod +x "$WORK/kubectl"
+
 run_once() {
   local label="$1"; shift
   : > "$WORK/bodies"
@@ -80,7 +90,6 @@ run_once() {
     PATH="$WORK:/usr/bin:/bin" \
     POLARIS_HOSTNAME=polaris.onyxia.example.com \
     KEYCLOAK_HOSTNAME=auth.onyxia.example.com \
-    POLARIS_CLIENT_SECRET=mock-client-secret \
     CURL_BODIES="$WORK/bodies" \
     "$@" \
     bash "$SCRIPT" >"$WORK/out-${label}" 2>&1 || {
@@ -90,7 +99,7 @@ run_once() {
     }
 }
 
-# --- 1. Fresh install + stub storage ---------------------------------------
+# --- 1. Fresh install + stub storage (client secret from K8s Secret) -------
 run_once "fresh-stub" CURL_GET_CODE=404 CURL_POST_CODE=201
 test -s "$WORK/bodies" || { echo "FAIL: no POST body captured for fresh-stub" >&2; exit 1; }
 grep -F '"storageType":"FILE"'  "$WORK/bodies" >/dev/null || \

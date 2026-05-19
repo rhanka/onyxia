@@ -16,6 +16,9 @@
 #   POLARIS_CLIENT_SECRET Confidential client secret for the Keycloak
 #                         `polaris` client. Required when POLARIS_ADMIN_TOKEN
 #                         is empty.
+#   POLARIS_NAMESPACE     Default: polaris. Used to resolve the fallback
+#                         Kubernetes Secret containing the client secret.
+#   POLARIS_CLIENT_SECRET_NAME Default: polaris-client
 #
 # Storage wiring — Section 4 stub. When ENABLE_POLARIS_STORAGE=true, also pass:
 #   POLARIS_WAREHOUSE_BUCKET     e.g. <project>-onyxia-warehouse (no gs://)
@@ -29,14 +32,22 @@ set -euo pipefail
 err() { echo "ERROR: $*" >&2; exit 2; }
 
 CATALOG_NAME="${POLARIS_CATALOG_NAME:-onyxia}"
+POLARIS_NAMESPACE="${POLARIS_NAMESPACE:-polaris}"
+POLARIS_CLIENT_SECRET_NAME="${POLARIS_CLIENT_SECRET_NAME:-polaris-client}"
 
 [ -n "${POLARIS_HOSTNAME:-}"  ] || err "set POLARIS_HOSTNAME (e.g. polaris.onyxia.example.com)"
 [ -n "${KEYCLOAK_HOSTNAME:-}" ] || err "set KEYCLOAK_HOSTNAME"
 
 # Resolve the admin bearer token.
 if [ -z "${POLARIS_ADMIN_TOKEN:-}" ]; then
+  if [ -z "${POLARIS_CLIENT_SECRET:-}" ] && command -v kubectl >/dev/null 2>&1; then
+    POLARIS_CLIENT_SECRET="$(
+      kubectl -n "${POLARIS_NAMESPACE}" get secret "${POLARIS_CLIENT_SECRET_NAME}" \
+        -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d || true
+    )"
+  fi
   [ -n "${POLARIS_CLIENT_SECRET:-}" ] || \
-    err "set POLARIS_ADMIN_TOKEN, or POLARIS_CLIENT_SECRET (for client_credentials grant)"
+    err "set POLARIS_ADMIN_TOKEN, POLARIS_CLIENT_SECRET, or create Secret ${POLARIS_NAMESPACE}/${POLARIS_CLIENT_SECRET_NAME}"
   echo "[polaris-init] minting admin token via client_credentials..."
   POLARIS_ADMIN_TOKEN="$(
     curl -sfS -X POST \

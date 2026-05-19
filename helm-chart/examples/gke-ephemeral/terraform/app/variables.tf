@@ -357,8 +357,8 @@ variable "polaris_release_name" {
 
 variable "polaris_image" {
   type        = string
-  description = "Apache Polaris container image (pinned). Switch to the helm chart once apache/polaris-helm is published."
-  default     = "apache/polaris:1.0.0"
+  description = "Apache Polaris container image (pinned to a published Docker Hub tag). Switch to the helm chart once apache/polaris-helm is published."
+  default     = "apache/polaris:1.5.0"
 }
 
 variable "polaris_hostname" {
